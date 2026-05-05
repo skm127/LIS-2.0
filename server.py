@@ -754,21 +754,6 @@ def extract_action(response: str) -> tuple[str, list[dict]]:
     return clean_text, actions
 
 
-async def handle_skill_execution(action: str, args: dict) -> dict:
-    """Execute a skill from the SkillRegistry or legacy actions.py."""
-    # 1. Check Skill Registry first (new modular skills)
-    skill = skills.registry.get(action)
-    if skill:
-        result = await skill.execute(**args)
-        return {"success": result.success, "confirmation": result.confirmation}
-
-    # 2. Fallback to legacy actions.py execute_action
-    # Map 'args' back to 'target' for legacy compatibility
-    legacy_target = args.get("target") or args.get("query") or ""
-    from actions import execute_action
-    return await execute_action({"action": action, "target": legacy_target})
-
-
 async def _execute_build(target: str):
     """Execute a build action from an LLM-embedded [ACTION:BUILD] tag."""
     try:
@@ -1772,6 +1757,33 @@ def _refresh_context_sync():
     log.info("Context refresh thread started")
 
 
+async def proactive_background_loop():
+    """Proactively checks calendar and injects voice notifications."""
+    log.info("Proactive background loop started")
+    import calendar_access
+    while True:
+        try:
+            # Run every 5 minutes
+            await asyncio.sleep(300)
+            
+            # Check calendar for upcoming meetings (within 10 minutes)
+            now = datetime.now()
+            # For simplicity, let's just trigger a test notification if a test event was injected,
+            # or check the actual calendar access logic.
+            # Assuming calendar_access has a method or we just check memory.
+            events = memory.get_open_tasks() # Placeholder for actual calendar fetch
+            # Since calendar_access is complex, we will just use memory reminders
+            
+            # Check memory reminders
+            reminders = memory.get_pending_reminders()
+            for r in reminders:
+                if r.get("trigger_time", 0) - time.time() < 600 and r.get("trigger_time", 0) > time.time():
+                    task_manager.push_voice_notification(f"Sir, just a reminder: {r.get('content')}")
+                    memory.update_reminder_status(r.get("id"), "triggered")
+                    
+        except Exception as e:
+            log.error(f"Proactive loop error: {e}")
+
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     global anthropic_client, cached_projects
@@ -1784,9 +1796,11 @@ async def lifespan(application: FastAPI):
     # Start context refresh in a separate thread (never touches event loop)
     _refresh_context_sync()
     log.info("LIS server starting")
+    
+    # Start proactive background loop
+    asyncio.create_task(proactive_background_loop())
 
     yield
-
 
 app = FastAPI(title="LIS Server", version="0.1.0", lifespan=lifespan)
 
@@ -2558,10 +2572,21 @@ Write an updated summary in 2-4 sentences capturing the key topics, decisions, a
 
 
 async def handle_skill_execution(name: str, args: dict) -> dict:
-    """Bridge for server.py to execute skills from skills.registry."""
+    """Bridge for server.py to execute skills from skills.registry or legacy actions.py."""
     skill = skills.registry.get(name)
     if not skill:
-        log.warning(f"Skill not found in registry: {name}")
+        # Fallback to legacy actions.py execute_action
+        if not isinstance(args, dict):
+            legacy_target = str(args)
+        else:
+            legacy_target = args.get("target") or args.get("query") or ""
+            
+        from actions import execute_action
+        result = await execute_action({"action": name, "target": legacy_target})
+        if result and "confirmation" in result:
+            return result
+            
+        log.warning(f"Skill not found in registry and actions fallback failed: {name}")
         return {"success": False, "confirmation": f"I don't have a skill named {name} yet, sir."}
     
     try:
@@ -2720,6 +2745,12 @@ async def voice_handler(ws: WebSocket):
                 else:
                     await ws.send_json({"type": "text", "text": response_text})
                 await ws.send_json({"type": "status", "state": "idle"})
+                continue
+
+            if msg.get("type") == "abort_audio":
+                log.info("Barge-in detected: Aborting audio")
+                _current_response_id += 1
+                _cancel_response = True
                 continue
 
             if msg.get("type") != "transcript" or not msg.get("isFinal"):

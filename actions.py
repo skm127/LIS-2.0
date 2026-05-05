@@ -161,6 +161,10 @@ async def execute_action(intent: dict, projects: list = None) -> dict:
     target = intent.get("target", "")
 
     if action == "open_terminal":
+        # Security Safeguard
+        if not re.search(r'\b(yes|confirm|confirmed|proceed|do it)\b', target.lower()):
+            return {"success": False, "confirmation": "This is a high-stakes terminal action. Please ask the user to explicitly confirm they want to execute this command.", "project_dir": None}
+            
         result = await open_terminal("claude --dangerously-skip-permissions")
         result["project_dir"] = None
         return result
@@ -183,6 +187,10 @@ async def execute_action(intent: dict, projects: list = None) -> dict:
         return result
 
     elif action == "build":
+        # Security Safeguard
+        if not re.search(r'\b(yes|confirm|confirmed|proceed|do it)\b', target.lower()):
+            return {"success": False, "confirmation": "This is a high-stakes build action. Please ask the user to explicitly confirm they want to spawn this project.", "project_dir": None}
+            
         # Create project folder on Desktop, spawn Claude Code
         project_name = _generate_project_name(target)
         project_dir = str(DESKTOP_PATH / project_name)

@@ -4,6 +4,7 @@ import time
 import json
 import difflib
 import subprocess
+import re
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Callable, Any
 
@@ -140,6 +141,13 @@ class LaunchAppSkill(Skill):
             "notion": "Notion.exe", "obsidian": "Obsidian.exe",
         }
         
+        app_name = str(app_name).strip()
+        # Security: Strip potentially dangerous shell characters to prevent injection
+        app_name = re.sub(r'[&|<>;"]', '', app_name)
+        
+        if not app_name:
+             return SkillResult(False, "No valid application name provided.")
+
         direct = DIRECT_LAUNCH.get(app_name.lower())
         if direct:
             try:
@@ -285,6 +293,15 @@ class SystemKeysSkill(Skill):
 
     async def execute(self, keys: str, **kwargs) -> SkillResult:
         """Supported: {ENTER}, {TAB}, {ESC}, or literal text."""
+        keys = str(keys)
+        if len(keys) > 50:
+             return SkillResult(False, "Key sequence too long.")
+             
+        # Block command injection attempts through key sequence
+        forbidden = ["cmd", "powershell", "format", "del", "rmdir", "Invoke-WebRequest"]
+        if any(f in keys.lower() for f in forbidden):
+             return SkillResult(False, "Action restricted by security protocol.")
+             
         try:
             # Use PowerShell SendKeys
             # Escape single quotes in keys if any
@@ -1095,3 +1112,33 @@ class MarketSummarySkill(Skill):
             return SkillResult(False, f"Market data unavailable: {e}")
 
 registry.register(MarketSummarySkill())
+
+# ---------------------------------------------------------------------------
+# MCP Integration Skill
+# ---------------------------------------------------------------------------
+
+class MCPActionSkill(Skill):
+    name = "mcp_call"
+    description = "Execute a tool on an external MCP (Model Context Protocol) server."
+
+    async def execute(self, server_name: str, tool_name: str, arguments: str = "{}", **kwargs) -> SkillResult:
+        try:
+            import json
+            from mcp_client import mcp_manager
+            
+            args_dict = json.loads(arguments) if isinstance(arguments, str) else arguments
+            
+            client = mcp_manager.clients.get(server_name)
+            if not client:
+                return SkillResult(False, f"MCP Server '{server_name}' is not configured.")
+                
+            result = await client.call_tool(tool_name, args_dict)
+            if result.get("success"):
+                return SkillResult(True, f"Successfully executed {tool_name} on {server_name}.", data=result.get("data"))
+            else:
+                return SkillResult(False, f"MCP execution failed: {result.get('error')}")
+                
+        except Exception as e:
+            return SkillResult(False, f"MCP call error: {e}")
+
+registry.register(MCPActionSkill())

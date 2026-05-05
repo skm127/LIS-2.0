@@ -90,6 +90,15 @@ const voiceInput = createVoiceInput(
   },
   (msg: string) => {
     showError(msg);
+  },
+  () => {
+    // Barge-in: if LIS is speaking, stop her immediately
+    if (currentState === "speaking") {
+      console.log("[barge-in] User interrupted LIS");
+      audioPlayer.stop();
+      transition("idle");
+      socket.send({ type: "abort_audio" });
+    }
   }
 );
 
@@ -438,7 +447,15 @@ const originalVoiceCallback = (text: string) => {
 // Re-create voice input with chat-aware callback
 const voiceInputWithChat = createVoiceInput(
   originalVoiceCallback,
-  (msg: string) => { showError(msg); }
+  (msg: string) => { showError(msg); },
+  () => {
+    if (currentState === "speaking") {
+      console.log("[barge-in] User interrupted LIS");
+      audioPlayer.stop();
+      transition("idle");
+      socket.send({ type: "abort_audio" });
+    }
+  }
 );
 
 // Override voiceInput methods to use the chat-aware version

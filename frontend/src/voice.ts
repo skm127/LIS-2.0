@@ -18,7 +18,8 @@ declare const webkitSpeechRecognition: any;
 
 export function createVoiceInput(
   onTranscript: (text: string) => void,
-  onError: (msg: string) => void
+  onError: (msg: string) => void,
+  onInterruption?: () => void
 ): VoiceInput {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const SR = (window as any).SpeechRecognition || (typeof webkitSpeechRecognition !== "undefined" ? webkitSpeechRecognition : null);
@@ -41,8 +42,11 @@ export function createVoiceInput(
   };
 
   recognition.onresult = (event: any) => {
+    let hasSpeech = false;
     for (let i = event.resultIndex; i < event.results.length; i++) {
       const transcript = event.results[i][0].transcript;
+      if (transcript.trim().length > 0) hasSpeech = true;
+      
       if (event.results[i].isFinal) {
         console.log("[mic] FINAL:", transcript);
         const text = transcript.trim();
@@ -50,6 +54,10 @@ export function createVoiceInput(
       } else {
         console.log("[mic] interim:", transcript);
       }
+    }
+    
+    if (hasSpeech && onInterruption) {
+      onInterruption();
     }
   };
 
