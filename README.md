@@ -178,7 +178,7 @@ Please open an issue before submitting large PRs.
 
 ## 📄 License
 
-MIT License — see [LICENSE](LICENSE) for details.
+Non-Commercial License — strictly prohibits commercial use or resale. See [LICENSE](LICENSE) for details.
 
 ## 👨‍💻 Author
 
