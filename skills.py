@@ -31,6 +31,7 @@ class Skill:
 class SkillRegistry:
     def __init__(self):
         self._skills: Dict[str, Skill] = {}
+        self.agent_spawner: Optional[Callable] = None
 
     def register(self, skill: Skill):
         self._skills[skill.name] = skill
@@ -1142,3 +1143,137 @@ class MCPActionSkill(Skill):
             return SkillResult(False, f"MCP call error: {e}")
 
 registry.register(MCPActionSkill())
+
+# ---------------------------------------------------------------------------
+# Omniscience (Phase 1)
+# ---------------------------------------------------------------------------
+
+class LocalDocumentSearchSkill(Skill):
+    name = "search_documents"
+    description = "Semantically search the user's local documents, PDFs, and codebases for specific information."
+
+    async def execute(self, query: str, **kwargs) -> SkillResult:
+        try:
+            from vector_memory import VectorMemory
+            vmem = VectorMemory()
+            results = vmem.search(query, top_k=5)
+            
+            if not results:
+                return SkillResult(False, "No relevant documents found.")
+                
+            # Format results
+            snippets = []
+            for r in results:
+                meta = r.get("metadata", {})
+                source = meta.get("filename", "Unknown Document")
+                score = r.get("score", 0)
+                # Ensure the text is brief to not overflow context
+                text = r.get("text", "")[:500]
+                snippets.append(f"Source [{source}] (Relevance {int(score*100)}%):\n{text}...")
+                
+            combined = "\n\n".join(snippets)
+            return SkillResult(True, f"Found relevant information in local documents:\n{combined}")
+        except Exception as e:
+            return SkillResult(False, f"Document search failed: {e}")
+
+registry.register(LocalDocumentSearchSkill())
+
+class ComputerControlSkill(Skill):
+    name = "computer_control"
+    description = "Move the mouse, click, or type on the screen. IMPORTANT: You must get user confirmation before using this skill."
+
+    async def execute(self, action: str, x: int = 0, y: int = 0, text: str = "", **kwargs) -> SkillResult:
+        try:
+            import pyautogui
+            x, y = int(x), int(y)
+            
+            if action == "move":
+                await asyncio.to_thread(pyautogui.moveTo, x, y, duration=0.5)
+                return SkillResult(True, f"Moved mouse to ({x}, {y}).")
+            elif action == "click":
+                await asyncio.to_thread(pyautogui.click, x, y)
+                return SkillResult(True, f"Clicked at ({x}, {y}).")
+            elif action == "type":
+                if not text:
+                    return SkillResult(False, "No text provided to type.")
+                await asyncio.to_thread(pyautogui.write, text, interval=0.01)
+                return SkillResult(True, f"Typed text: {text[:20]}...")
+            elif action == "press":
+                if not text:
+                    return SkillResult(False, "No key provided to press.")
+                await asyncio.to_thread(pyautogui.press, text)
+                return SkillResult(True, f"Pressed key: {text}")
+            else:
+                return SkillResult(False, f"Unknown computer control action: {action}")
+                
+        except ImportError:
+            return SkillResult(False, "pyautogui is not installed. Run: pip install pyautogui")
+        except Exception as e:
+            return SkillResult(False, f"Computer control failed: {e}")
+
+registry.register(ComputerControlSkill())
+
+# ---------------------------------------------------------------------------
+# Swarm Agents (Phase 3)
+# ---------------------------------------------------------------------------
+
+class SubAgentSkill(Skill):
+    name = "spawn_agent"
+    description = "Spawn a specialized sub-agent to handle a long-running or complex background task. Returns the final summary from the agent."
+
+    async def execute(self, task_description: str, **kwargs) -> SkillResult:
+        if not registry.agent_spawner:
+            return SkillResult(False, "Agent spawner is not configured in the registry.")
+            
+        try:
+            log.info(f"Spawning sub-agent for task: {task_description}")
+            # Call the injected spawner
+            result = await registry.agent_spawner(task_description)
+            return SkillResult(True, f"Sub-agent completed the task. Result: {result}")
+        except Exception as e:
+            return SkillResult(False, f"Sub-agent failed: {e}")
+
+registry.register(SubAgentSkill())
+
+# ---------------------------------------------------------------------------
+# Smart Home IoT (Phase 4)
+# ---------------------------------------------------------------------------
+
+class SmartHomeSkill(Skill):
+    name = "smart_home_control"
+    description = "Control physical smart home devices like lights, locks, and thermostats via Home Assistant."
+
+    async def execute(self, entity_id: str, action: str, **kwargs) -> SkillResult:
+        import os
+        ha_url = os.environ.get("HA_URL")
+        ha_token = os.environ.get("HA_TOKEN")
+        
+        if not ha_url or not ha_token:
+            return SkillResult(False, "Home Assistant is not configured. HA_URL and HA_TOKEN must be set in .env")
+            
+        try:
+            import aiohttp
+            
+            headers = {
+                "Authorization": f"Bearer {ha_token}",
+                "Content-Type": "application/json",
+            }
+            
+            domain = entity_id.split('.')[0]
+            # e.g. turn_on, turn_off, toggle
+            endpoint = f"{ha_url.rstrip('/')}/api/services/{domain}/{action}"
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(endpoint, headers=headers, json={"entity_id": entity_id}) as resp:
+                    if resp.status in [200, 201]:
+                        return SkillResult(True, f"Successfully executed {action} on {entity_id}.")
+                    else:
+                        error_text = await resp.text()
+                        return SkillResult(False, f"Home Assistant error ({resp.status}): {error_text}")
+                        
+        except ImportError:
+            return SkillResult(False, "aiohttp is not installed. Run: pip install aiohttp")
+        except Exception as e:
+            return SkillResult(False, f"Failed to connect to Smart Home: {e}")
+
+registry.register(SmartHomeSkill())

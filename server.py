@@ -2604,6 +2604,30 @@ async def handle_skill_execution(name: str, args: dict) -> dict:
         log.error(f"Skill execution failed ({name}): {e}")
         return {"success": False, "confirmation": f"I had trouble with the {name} skill, sir."}
 
+async def _spawn_sub_agent(task_description: str) -> str:
+    """Spawns a new ReActEngine instance to handle a sub-task."""
+    from react_engine import ReActEngine
+    agent = ReActEngine(llm.generate, _react_skill_executor)
+    
+    # Available skills (excluding spawn_agent and computer_control for safety)
+    skill_list = [
+        f"- {name}: {s.description}"
+        for name, s in skills.registry._skills.items()
+        if name not in ["spawn_agent", "computer_control"]
+    ]
+    
+    log.info(f"Sub-agent starting task: {task_description}")
+    result = await agent.run(
+        user_request=task_description,
+        available_skills=skill_list,
+        max_steps=10
+    )
+    log.info(f"Sub-agent completed task. Success: {result.success}")
+    return result.response
+
+# Inject the spawner into the registry for the SubAgentSkill
+skills.registry.agent_spawner = _spawn_sub_agent
+
 # -- WebSocket Voice Handler -----------------------------------------------
 
 @app.websocket("/ws/voice")

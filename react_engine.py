@@ -197,6 +197,22 @@ class ReActEngine:
                 # Execute action if one was specified
                 if step.action:
                     log.info(f"ReAct [{step_num}] Act: {step.action}({step.action_args})")
+                    
+                    # ── SAFETY LOCK ──
+                    if step.action == "computer_control":
+                        if not re.search(r'\b(yes|confirm|confirmed|proceed|do it)\b', user_request.lower()):
+                            step.observation = "FAILED: This is a high-stakes computer control action. You must ask the user for explicit confirmation before proceeding."
+                            log.warning(f"ReAct [{step_num}] Blocked {step.action} missing confirmation.")
+                            steps.append(step)
+                            if on_step:
+                                await self._safe_callback(on_step, step)
+                            messages.append({"role": "assistant", "content": json.dumps(step_data)})
+                            messages.append({
+                                "role": "user",
+                                "content": f"Observation: {step.observation}\n\nContinue with the next step."
+                            })
+                            continue
+
                     try:
                         result = await asyncio.wait_for(
                             self._execute_skill(step.action, step.action_args or {}),
