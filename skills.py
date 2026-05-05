@@ -857,11 +857,30 @@ registry.register(VisionSkill())
 # Aliases — the LLM often uses these names instead of analyze_screen
 class TakeScreenshotSkill(Skill):
     name = "take_screenshot"
-    description = "Take a screenshot and describe what's visible on the screen."
+    description = "Take a screenshot and save it to the user's desktop."
 
     async def execute(self, **kwargs) -> SkillResult:
-        vision = VisionSkill()
-        return await vision.execute(query=kwargs.get("query", "What's on my screen right now?"))
+        try:
+            import pyautogui
+            import os
+            from datetime import datetime
+            import asyncio
+            
+            img = await asyncio.to_thread(pyautogui.screenshot)
+            
+            save_dir = os.path.join(os.path.expanduser("~"), "Desktop", "lis_captures")
+            os.makedirs(save_dir, exist_ok=True)
+            
+            filename = f"screenshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+            filepath = os.path.join(save_dir, filename)
+            
+            await asyncio.to_thread(img.save, filepath)
+            
+            return SkillResult(True, f"Screenshot taken and saved to {filepath}")
+        except ImportError:
+            return SkillResult(False, "pyautogui is not installed. Please install it to take screenshots.")
+        except Exception as e:
+            return SkillResult(False, f"Failed to take screenshot: {e}")
 
 class DescribeScreenSkill(Skill):
     name = "describe_screen"
@@ -1277,3 +1296,199 @@ class SmartHomeSkill(Skill):
             return SkillResult(False, f"Failed to connect to Smart Home: {e}")
 
 registry.register(SmartHomeSkill())
+
+class WebcamCaptureSkill(Skill):
+    """
+    Takes a photo from the system webcam and returns the image path.
+    Requires opencv-python (cv2).
+    """
+    name = "webcam_capture"
+    description = "Takes a photo using the webcam. Returns the absolute file path."
+
+    async def execute(self, **kwargs) -> SkillResult:
+        try:
+            import cv2
+            import os
+            from datetime import datetime
+            
+            import asyncio
+            
+            def _capture():
+                cap = cv2.VideoCapture(0)
+                if not cap.isOpened():
+                    return False, None
+                ret, frame = cap.read()
+                cap.release()
+                return ret, frame
+                
+            ret, frame = await asyncio.to_thread(_capture)
+            
+            if not ret:
+                return SkillResult(False, "Failed to capture frame from webcam.")
+                
+            save_dir = os.path.join(os.path.expanduser("~"), "Desktop", "lis_captures")
+            os.makedirs(save_dir, exist_ok=True)
+            
+            filename = f"webcam_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+            filepath = os.path.join(save_dir, filename)
+            
+            await asyncio.to_thread(cv2.imwrite, filepath, frame)
+            return SkillResult(True, f"Webcam photo captured and saved to {filepath}")
+            
+        except ImportError:
+            return SkillResult(False, "OpenCV is not installed. Run: pip install opencv-python")
+        except Exception as e:
+            return SkillResult(False, f"Webcam capture failed: {e}")
+
+registry.register(WebcamCaptureSkill())
+
+class KnowledgeGraphSkill(Skill):
+    """
+    Maps entities to a procedural knowledge graph or queries it.
+    action: 'add' or 'query'
+    """
+    name = "knowledge_graph"
+    description = "Adds or queries relationships in the memory palace. Actions: 'add', 'query'. Provide subject, predicate, obj for 'add'. Provide entity for 'query'."
+
+    async def execute(self, action: str, subject: str = "", predicate: str = "", obj: str = "", entity: str = "", **kwargs) -> SkillResult:
+        try:
+            from knowledge_graph import kg
+            
+            if action == "add":
+                if not (subject and predicate and obj):
+                    return SkillResult(False, "Missing subject, predicate, or object for adding to graph.")
+                kg.add_relation(subject, predicate, obj)
+                return SkillResult(True, f"Added relationship: {subject} {predicate} {obj}")
+                
+            elif action == "query":
+                if not entity:
+                    return SkillResult(False, "Missing entity to query.")
+                results = kg.query(entity)
+                if not results:
+                    return SkillResult(False, f"I don't know anything about {entity}.")
+                return SkillResult(True, f"Knowledge about {entity}:\n" + "\n".join(results))
+                
+            return SkillResult(False, "Invalid action. Use 'add' or 'query'.")
+        except ImportError:
+            return SkillResult(False, "knowledge_graph.py module not found or networkx missing.")
+        except Exception as e:
+            return SkillResult(False, f"Knowledge Graph operation failed: {e}")
+
+registry.register(KnowledgeGraphSkill())
+
+class FinanceSkill(Skill):
+    """
+    LIS 4.0 Financial Orchestration.
+    Fetches cryptocurrency prices via CoinGecko.
+    """
+    name = "get_crypto_price"
+    description = "Fetches the current price of a cryptocurrency in USD."
+
+    async def execute(self, coin_id: str, **kwargs) -> SkillResult:
+        try:
+            import aiohttp
+            clean_id = coin_id.lower().strip()
+            url = f"https://api.coingecko.com/api/v3/simple/price?ids={clean_id}&vs_currencies=usd"
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        if clean_id in data:
+                            price = data[clean_id]["usd"]
+                            return SkillResult(True, f"The current price of {coin_id} is ${price:,.2f} USD.")
+                        else:
+                            return SkillResult(False, f"Could not find price data for '{coin_id}'.")
+                    else:
+                        return SkillResult(False, f"CoinGecko API error: {resp.status}")
+                        
+        except ImportError:
+            return SkillResult(False, "aiohttp is not installed.")
+        except Exception as e:
+            return SkillResult(False, f"Failed to fetch crypto price: {e}")
+
+registry.register(FinanceSkill())
+
+# ---------------------------------------------------------------------------
+# Communication & Edge Browser Skills
+# ---------------------------------------------------------------------------
+
+class BrowseEdgeSkill(Skill):
+    name = "browse_edge"
+    description = "Open Microsoft Edge and navigate to a specific URL or perform a web search."
+    
+    async def execute(self, query_or_url: str, **kwargs) -> SkillResult:
+        try:
+            import urllib.parse
+            import asyncio
+            if query_or_url.startswith("http"):
+                url = query_or_url
+            else:
+                url = f"https://www.google.com/search?q={urllib.parse.quote(query_or_url)}"
+            
+            cmd = f'start msedge "{url}"'
+            proc = await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await proc.communicate()
+            return SkillResult(True, f"Opened Edge for: {query_or_url}")
+        except Exception as e:
+            return SkillResult(False, f"Failed to open Edge: {e}")
+
+class SendEmailSkill(Skill):
+    name = "send_email"
+    description = "Open Microsoft Edge to compose an email via Gmail."
+    
+    async def execute(self, to: str = "", subject: str = "", body: str = "", **kwargs) -> SkillResult:
+        try:
+            import urllib.parse
+            import asyncio
+            
+            url = f"https://mail.google.com/mail/?view=cm&fs=1"
+            if to: url += f"&to={urllib.parse.quote(to)}"
+            if subject: url += f"&su={urllib.parse.quote(subject)}"
+            if body: url += f"&body={urllib.parse.quote(body)}"
+            
+            cmd = f'start msedge "{url}"'
+            proc = await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await proc.communicate()
+            return SkillResult(True, "Opened Gmail compose window in Edge.")
+        except Exception as e:
+            return SkillResult(False, f"Failed to open Email: {e}")
+
+class WhatsAppSkill(Skill):
+    name = "send_whatsapp"
+    description = "Open Microsoft Edge to send a WhatsApp message."
+    
+    async def execute(self, phone: str = "", message: str = "", **kwargs) -> SkillResult:
+        try:
+            import urllib.parse
+            import asyncio
+            
+            url = "https://web.whatsapp.com/send?"
+            if phone:
+                clean_phone = ''.join(c for c in phone if c.isdigit() or c == '+')
+                url += f"phone={clean_phone}&"
+            if message:
+                url += f"text={urllib.parse.quote(message)}"
+            
+            cmd = f'start msedge "{url}"'
+            proc = await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await proc.communicate()
+            return SkillResult(True, "Opened WhatsApp Web in Edge.")
+        except Exception as e:
+            return SkillResult(False, f"Failed to open WhatsApp: {e}")
+
+registry.register(BrowseEdgeSkill())
+registry.register(SendEmailSkill())
+registry.register(WhatsAppSkill())

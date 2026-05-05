@@ -17,11 +17,12 @@ A voice-first AI assistant that lives on your desktop. Speak naturally, and LIS 
 - **👁️ Screen Vision** — Takes screenshots and analyzes them with Gemini Vision
 - **💬 Chat Panel** — Persistent conversation history with glassmorphic UI
 - **🖥️ System Tray** — Runs silently in background with tray icon
-- **📱 30+ Skills** — Weather, web search, app launching, volume control, timers, stocks, crypto, and more
+- **📱 40+ Skills** — Web search, Email, WhatsApp, Calendar, Weather, Timers, Stocks, Crypto, and more
 - **🔮 Audio-Reactive Orb** — Three.js particle visualization that pulses with LIS's voice
 - **🏗️ Build Software** — Spawns Claude Code sessions to build entire projects from voice commands
 - **📋 Task Management** — Create, track, and manage tasks with priorities and due dates
 - **🌐 Web Research** — Deep research with auto-generated HTML reports
+- **✉️ Native Communication** — Send emails and WhatsApp messages directly via Microsoft Edge
 
 ## 🖥️ Requirements
 

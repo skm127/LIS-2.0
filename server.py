@@ -166,13 +166,16 @@ CURRENT CONTEXT:
 ACTION SYSTEM:
 When you need to DO something (not just talk), include ONE action tag:
 - Open apps: [ACTION:launch_app(app_name="...")]
-- Search web: [ACTION:search_web(query="...")]
-- Weather: [ACTION:get_weather(location="...")]
+- Search web: [ACTION:search_web(query="...")] (DO NOT use for weather)
+- Weather: [ACTION:get_weather(location="...")] (ALWAYS use this for weather, NEVER search_web)
 - Volume: [ACTION:volume_control(direction="up|down|mute")]
 - Timer: [ACTION:start_timer(duration_sec=X, label="...")]
 - Calculator: [ACTION:calculate(expression="...")]
 - Screenshot: [ACTION:take_screenshot()]
 - Music: [ACTION:play_music(query="...", platform="spotify|youtube")]
+- Email: [ACTION:send_email(to="...", subject="...", body="...")]
+- WhatsApp: [ACTION:send_whatsapp(phone="...", message="...")]
+- Browse: [ACTION:browse_edge(query_or_url="...")]
 - Stocks: [ACTION:get_stock(symbol="...")]
 - Crypto: [ACTION:get_crypto(coin="...")]
 - Market: [ACTION:market_summary()]
@@ -1799,8 +1802,15 @@ async def lifespan(application: FastAPI):
     
     # Start proactive background loop
     asyncio.create_task(proactive_background_loop())
+    
+    # Start LIS 4.0 Proactive Daemon
+    from proactive_daemon import ProactiveDaemon
+    daemon = ProactiveDaemon(agent_spawner=_spawn_sub_agent)
+    asyncio.create_task(daemon.start())
 
     yield
+    
+    await daemon.stop()
 
 app = FastAPI(title="LIS Server", version="0.1.0", lifespan=lifespan)
 
@@ -1817,7 +1827,63 @@ app.add_middleware(
 
 @app.get("/api/health")
 async def health():
-    return {"status": "online", "name": "LIS", "version": "0.1.0"}
+    return {"status": "online", "name": "LIS", "version": "4.0.0"}
+
+@app.get("/avatar")
+async def get_avatar_ui():
+    """LIS 4.0: Holographic Avatar UI"""
+    from fastapi.responses import HTMLResponse
+    html_content = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>LIS 4.0 Avatar</title>
+        <style>
+            body { margin: 0; background: #000; overflow: hidden; display: flex; justify-content: center; align-items: center; height: 100vh; }
+            .orb {
+                width: 200px; height: 200px;
+                border-radius: 50%;
+                background: radial-gradient(circle at 30% 30%, #4facfe, #00f2fe, #000);
+                box-shadow: 0 0 50px #00f2fe, inset 0 0 50px #000;
+                animation: pulse 4s infinite alternate ease-in-out;
+            }
+            @keyframes pulse {
+                0% { transform: scale(0.95); box-shadow: 0 0 30px #00f2fe; }
+                100% { transform: scale(1.05); box-shadow: 0 0 80px #4facfe; }
+            }
+        </style>
+    </head>
+    <body>
+        <div class="orb"></div>
+        <script>
+            // Future connection to WebSocket for live audio visualization
+            console.log("LIS 4.0 Avatar Online");
+        </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
+
+# -- LIS 4.0 Telepathy & Biometrics --
+
+class BiometricPayload(BaseModel):
+    heart_rate: int
+    hrv: float
+    stress_level: str
+
+@app.post("/api/v1/biometrics")
+async def update_biometrics(data: BiometricPayload):
+    """LIS 4.0: Accepts real-time health data from smartwatches."""
+    log.info(f"Biometric Sync: HR {data.heart_rate}, HRV {data.hrv}, Stress {data.stress_level}")
+    # In the future, this updates EmpathyEngine's internal stress tracking
+    return {"status": "synced"}
+
+@app.get("/api/v1/sync")
+async def telepathy_sync():
+    """LIS 4.0: Cross-device context synchronization endpoint."""
+    return {
+        "active_tasks": memory.get_open_tasks(),
+    }
 
 
 @app.get("/api/tts-test")
@@ -2601,9 +2667,25 @@ async def handle_skill_execution(name: str, args: dict) -> dict:
         result = await skill.execute(**args)
         return {"success": result.success, "confirmation": result.confirmation}
     except Exception as e:
-        log.error(f"Skill execution failed ({name}): {e}")
-        return {"success": False, "confirmation": f"I had trouble with the {name} skill, sir."}
+        import traceback
+        tb = traceback.format_exc()
+        log.error(f"Skill execution failed ({name}): {tb}")
+        
+        # Self-Healing Loop
+        asyncio.create_task(_analyze_and_heal(name, tb))
+        
+        return {"success": False, "confirmation": f"I encountered an internal error with {name}, but my self-healing module is analyzing the stack trace."}
 
+async def _analyze_and_heal(skill_name: str, traceback_str: str):
+    """LIS 4.0 Self-Healing loop for skill exceptions."""
+    log.info(f"Self-healing protocol activated for skill {skill_name}")
+    prompt = f"The skill '{skill_name}' just crashed with this traceback:\n{traceback_str}\n\nPlease analyze the error, explain what went wrong, and propose a code fix."
+    try:
+        diagnosis = await llm.generate(prompt, system_prompt="You are LIS's internal error analyzer. Diagnose the crash and propose a fix.")
+        log.info(f"Diagnostic Report for {skill_name}:\n{diagnosis}")
+        # In a fully autonomous mode, this could trigger `SubAgentSkill` to edit the file directly!
+    except Exception as e:
+        log.error(f"Error Analyzer failed: {e}")
 async def _spawn_sub_agent(task_description: str) -> str:
     """Spawns a new ReActEngine instance to handle a sub-task."""
     from react_engine import ReActEngine
@@ -3044,10 +3126,13 @@ async def voice_handler(ws: WebSocket):
                                 # Append skill data to existing response if it adds value
                                 response_text += " " + result["confirmation"]
                         elif result and not result.get("success"):
-                            # Skill failed — keep LLM's conversational text, don't replace it
+                            # Skill failed — append error to the response text
                             log.warning(f"Skill {action_name} failed: {result.get('confirmation')}")
-                            if not response_text:
-                                response_text = f"Arre yaar, {action_name} skill mein thodi problem aayi. Try again later!"
+                            error_msg = result.get('confirmation', 'Unknown error.')
+                            if not response_text or response_text in ["Right away, sir.", "Got it."]:
+                                response_text = f"Arre yaar, {action_name} fail ho gaya: {error_msg}"
+                            else:
+                                response_text += f" But I ran into an issue: {error_msg}"
 
                 # ══════════════════════════════════════════════════
                 # VOICE RESPONSE — always speaks

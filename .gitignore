@@ -22,6 +22,7 @@ data/active_session.json
 data/.lis_output.txt
 data/chroma_db/
 data/screenshots/
+lis_captures/
 
 # Certificates
 *.pem
