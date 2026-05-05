@@ -1,0 +1,52 @@
+# Environment
+.env
+.env.local
+
+# Dependencies
+node_modules/
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Data (user-specific, generated at runtime)
+*.db
+*.db-shm
+*.db-wal
+data/*.jsonl
+data/active_session.json
+data/.lis_output.txt
+data/chroma_db/
+data/screenshots/
+
+# Certificates
+*.pem
+
+# Build
+dist/
+frontend/dist/
+.vite/
+frontend/.vite/
+
+# IDE / System
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+.claude/
+.arch/
+
+# Desktop overlay (macOS legacy)
+desktop-overlay/node_modules/
+context/
+
+# Scratch / testing
+scratch/
+
+# Logs
+*.log

@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LIS</title>
+    <link rel="stylesheet" href="/src/style.css" />
+    <link rel="manifest" href="/manifest.json" />
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js');
+        });
+      }
+    </script>
+  </head>
+  <body>
+    <canvas id="orb-canvas"></canvas>
+
+    <!-- Minimal controls — top right -->
+    <div id="controls">
+      <button id="btn-mute" title="Mute/Unmute">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+          <line x1="12" y1="19" x2="12" y2="23"/>
+        </svg>
+      </button>
+      <button id="btn-menu" title="Menu">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Dropdown menu -->
+    <div id="menu-dropdown" style="display:none">
+      <button id="btn-settings">Settings</button>
+      <button id="btn-restart">Restart Server</button>
+      <button id="btn-fix-self">Fix Yourself</button>
+    </div>
+
+    <div id="status-text"></div>
+    <div id="LIS-label">LIS</div>
+    
+    <!-- Response Feedback UI -->
+    <div id="feedback-ui" style="display:none; position: fixed; top: 15%; right: 5%; background: rgba(0,0,0,0.6); padding: 8px 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); backdrop-filter: blur(4px); z-index: 100;">
+      <span style="color: #aaa; font-size: 0.8rem; margin-right: 8px;">Was this helpful?</span>
+      <button id="btn-feedback-up" style="background: none; border: none; cursor: pointer; color: #4ade80; opacity: 0.7; font-size: 1.1rem; margin-right: 4px; padding: 2px;">👍</button>
+      <button id="btn-feedback-down" style="background: none; border: none; cursor: pointer; color: #f87171; opacity: 0.7; font-size: 1.1rem; padding: 2px;">👎</button>
+    </div>
+
+    <!-- Chat Panel — slides from left -->
+    <div id="chat-panel">
+      <div class="chat-header">
+        <div class="chat-header-left">
+          <div class="chat-pulse"></div>
+          <span class="chat-title">Conversation</span>
+        </div>
+        <button id="btn-chat-close" class="chat-close-btn" title="Close chat">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M15 19l-7-7 7-7"/>
+          </svg>
+        </button>
+      </div>
+      <div id="chat-messages" class="chat-messages">
+        <!-- Messages injected here -->
+      </div>
+      <div class="chat-stats" id="chat-stats">
+        <span id="chat-msg-count">0 messages</span>
+        <span id="chat-provider">●</span>
+      </div>
+    </div>
+
+    <div id="error-text"></div>
+    
+    <!-- Text Fallback Input -->
+    <div id="text-input-container">
+      <button id="btn-chat-toggle" class="chat-toggle-btn" title="Toggle chat">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+        </svg>
+      </button>
+      <input type="text" id="text-input" placeholder="Type a message to LIS..." autocomplete="off"/>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
