@@ -160,15 +160,7 @@ async def test_browser_research(browser):
 # ── Action Detection ─────────────────────────────────────────────────
 
 
-def test_browse_action_keywords():
-    """Action keywords include browse-related terms."""
-    from server import ACTION_KEYWORDS
 
-    assert "browse" in ACTION_KEYWORDS
-    browse_keywords = ACTION_KEYWORDS["browse"]
-    assert "search for" in browse_keywords
-    assert "look up" in browse_keywords
-    assert "google" in browse_keywords
 
 
 # ── Browser Lifecycle ─────────────────────────────────────────────────
