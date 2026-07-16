@@ -35,6 +35,7 @@ class VectorMemory:
 
     def __init__(self, persist_dir: str = None):
         self._persist_dir = persist_dir or str(CHROMA_DIR)
+        self._client = None
         self._collection = None
         self._embed_model = None
         self._initialized = False
@@ -52,11 +53,11 @@ class VectorMemory:
 
             # Create persistent ChromaDB client
             Path(self._persist_dir).mkdir(parents=True, exist_ok=True)
-            client = chromadb.PersistentClient(
+            self._client = chromadb.PersistentClient(
                 path=self._persist_dir,
                 settings=Settings(anonymized_telemetry=False),
             )
-            self._collection = client.get_or_create_collection(
+            self._collection = self._client.get_or_create_collection(
                 name="lis_memory",
                 metadata={"hnsw:space": "cosine"},
             )
@@ -98,7 +99,7 @@ class VectorMemory:
 
     def _make_id(self, text: str) -> str:
         """Generate a deterministic ID from text to avoid duplicates."""
-        return hashlib.md5(text.encode()).hexdigest()[:16]
+        return hashlib.sha256(text.encode()).hexdigest()[:24]
 
     # ═══════════════════════════════════════════════════════════════════
     # Public API
@@ -310,11 +311,9 @@ class VectorMemory:
         if not self._lazy_init():
             return False
         try:
-            # Delete and recreate collection
-            import chromadb
-            client = chromadb.PersistentClient(path=self._persist_dir)
-            client.delete_collection("lis_memory")
-            self._collection = client.create_collection(
+            # Delete and recreate collection using the existing client
+            self._client.delete_collection("lis_memory")
+            self._collection = self._client.get_or_create_collection(
                 name="lis_memory",
                 metadata={"hnsw:space": "cosine"},
             )
@@ -323,3 +322,144 @@ class VectorMemory:
         except Exception as e:
             log.error(f"Vector memory clear failed: {e}")
             return False
+
+    def search_hybrid(
+        self,
+        query: str,
+        fts_results: list[dict] = None,
+        top_k: int = 5,
+        vector_weight: float = 0.6,
+        fts_weight: float = 0.4,
+        min_score: float = 0.3,
+    ) -> list[dict]:
+        """Hybrid search combining vector similarity with FTS5 keyword results.
+
+        Uses Reciprocal Rank Fusion (RRF) to merge rankings from both sources.
+
+        Args:
+            query: Natural language query
+            fts_results: Pre-computed FTS5 results as list of {"text": str, "score": float, ...}
+            top_k: Number of results to return
+            vector_weight: Weight for vector search results (0-1)
+            fts_weight: Weight for FTS results (0-1)
+            min_score: Minimum combined score threshold
+
+        Returns:
+            List of {"text": str, "score": float, "metadata": dict, "source": str}
+        """
+        K = 60  # RRF constant
+        scored: dict[str, dict] = {}
+
+        # Vector search results
+        vector_results = self.search(query, top_k=top_k * 2, min_score=0.2)
+        for rank, r in enumerate(vector_results):
+            text_key = r["text"][:200]  # Use truncated text as merge key
+            rrf_score = vector_weight / (K + rank + 1)
+            if text_key in scored:
+                scored[text_key]["score"] += rrf_score
+                scored[text_key]["sources"].append("vector")
+            else:
+                scored[text_key] = {
+                    "text": r["text"],
+                    "score": rrf_score,
+                    "metadata": r.get("metadata", {}),
+                    "sources": ["vector"],
+                }
+
+        # FTS results
+        if fts_results:
+            for rank, r in enumerate(fts_results):
+                text_key = (r.get("text") or r.get("content", ""))[:200]
+                rrf_score = fts_weight / (K + rank + 1)
+                if text_key in scored:
+                    scored[text_key]["score"] += rrf_score
+                    scored[text_key]["sources"].append("fts")
+                else:
+                    scored[text_key] = {
+                        "text": r.get("text") or r.get("content", ""),
+                        "score": rrf_score,
+                        "metadata": r.get("metadata", {}),
+                        "sources": ["fts"],
+                    }
+
+        # Sort by combined score, filter by threshold
+        results = sorted(scored.values(), key=lambda x: x["score"], reverse=True)
+        return [
+            {"text": r["text"], "score": round(r["score"], 4), "metadata": r["metadata"], "sources": r["sources"]}
+            for r in results[:top_k]
+            if r["score"] >= min_score * 0.01  # RRF scores are much smaller than raw similarity
+        ]
+
+    def get_all_sources(self) -> list[str]:
+        """Get all unique source file paths from indexed documents."""
+        if not self._lazy_init():
+            return []
+        try:
+            # Query all documents with type=document and extract unique sources
+            results = self._collection.get(
+                where={"type": "document"},
+                include=["metadatas"],
+            )
+            sources = set()
+            if results and results.get("metadatas"):
+                for meta in results["metadatas"]:
+                    if meta and meta.get("source"):
+                        sources.add(meta["source"])
+            return sorted(sources)
+        except Exception as e:
+            log.warning(f"Failed to get sources: {e}")
+            return []
+
+    def delete_by_source(self, source_path: str) -> int:
+        """Delete all vectors from a specific source file. Returns count deleted."""
+        if not self._lazy_init():
+            return 0
+        try:
+            # Get IDs matching this source
+            results = self._collection.get(
+                where={"source": source_path},
+                include=[],
+            )
+            if results and results.get("ids"):
+                self._collection.delete(ids=results["ids"])
+                count = len(results["ids"])
+                log.info(f"Deleted {count} vectors from source: {source_path}")
+                return count
+            return 0
+        except Exception as e:
+            log.warning(f"Failed to delete by source: {e}")
+            return 0
+
+    def already_has(self, content_hash: str) -> bool:
+        """Check if a chunk with this content hash already exists."""
+        if not self._lazy_init():
+            return False
+        try:
+            results = self._collection.get(
+                where={"content_hash": content_hash},
+                include=["metadatas"],
+                limit=1,
+            )
+            return len(results.get("ids", [])) > 0
+        except Exception as e:
+            log.warning(f"Failed to check existing hash: {e}")
+            return False
+
+    def delete_by_domain(self, domain: str) -> int:
+        """Delete all vectors matching a specific source domain. Returns count deleted."""
+        if not self._lazy_init():
+            return 0
+        try:
+            results = self._collection.get(
+                where={"source_domain": domain},
+                include=[],
+            )
+            if results and results.get("ids"):
+                self._collection.delete(ids=results["ids"])
+                count = len(results["ids"])
+                log.info(f"Deleted {count} vectors from domain: {domain}")
+                return count
+            return 0
+        except Exception as e:
+            log.warning(f"Failed to delete by domain: {e}")
+            return 0

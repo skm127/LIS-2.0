@@ -20,6 +20,7 @@ class KnowledgeGraph:
                 log.info(f"Loaded Knowledge Graph with {len(self.graph.nodes)} nodes.")
             except Exception as e:
                 log.error(f"Failed to load Knowledge Graph: {e}")
+                self.graph = nx.DiGraph()
 
     def _save(self):
         try:
@@ -58,5 +59,12 @@ class KnowledgeGraph:
             
         return results
 
-# Global instance
-kg = KnowledgeGraph()
+# Lazy singleton – avoids import-time crash if lis_graph.json is corrupt
+_kg_instance = None
+
+def get_kg() -> KnowledgeGraph:
+    """Get or create the global KnowledgeGraph instance (lazy singleton)."""
+    global _kg_instance
+    if _kg_instance is None:
+        _kg_instance = KnowledgeGraph()
+    return _kg_instance

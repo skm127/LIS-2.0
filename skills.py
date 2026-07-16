@@ -1352,7 +1352,8 @@ class KnowledgeGraphSkill(Skill):
 
     async def execute(self, action: str, subject: str = "", predicate: str = "", obj: str = "", entity: str = "", **kwargs) -> SkillResult:
         try:
-            from knowledge_graph import kg
+            from knowledge_graph import get_kg
+            kg = get_kg()
             
             if action == "add":
                 if not (subject and predicate and obj):

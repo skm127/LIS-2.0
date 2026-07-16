@@ -172,6 +172,42 @@ def init_db():
             title, content, topic,
             content='notes', content_rowid='id'
         );
+
+        -- FTS5 sync triggers for memories
+        CREATE TRIGGER IF NOT EXISTS memory_fts_ai AFTER INSERT ON memories BEGIN
+            INSERT INTO memory_fts(rowid, content, type, source) VALUES (new.id, new.content, new.type, new.source);
+        END;
+        CREATE TRIGGER IF NOT EXISTS memory_fts_ad AFTER DELETE ON memories BEGIN
+            INSERT INTO memory_fts(memory_fts, rowid, content, type, source) VALUES('delete', old.id, old.content, old.type, old.source);
+        END;
+        CREATE TRIGGER IF NOT EXISTS memory_fts_au AFTER UPDATE ON memories BEGIN
+            INSERT INTO memory_fts(memory_fts, rowid, content, type, source) VALUES('delete', old.id, old.content, old.type, old.source);
+            INSERT INTO memory_fts(rowid, content, type, source) VALUES (new.id, new.content, new.type, new.source);
+        END;
+
+        -- FTS5 sync triggers for conversation_history
+        CREATE TRIGGER IF NOT EXISTS conv_fts_ai AFTER INSERT ON conversation_history BEGIN
+            INSERT INTO conversation_fts(rowid, content) VALUES (new.id, new.content);
+        END;
+        CREATE TRIGGER IF NOT EXISTS conv_fts_ad AFTER DELETE ON conversation_history BEGIN
+            INSERT INTO conversation_fts(conversation_fts, rowid, content) VALUES('delete', old.id, old.content);
+        END;
+
+        -- FTS5 sync triggers for tasks
+        CREATE TRIGGER IF NOT EXISTS task_fts_ai AFTER INSERT ON tasks BEGIN
+            INSERT INTO task_fts(rowid, title, description, project, notes) VALUES (new.id, new.title, new.description, new.project, new.notes);
+        END;
+        CREATE TRIGGER IF NOT EXISTS task_fts_ad AFTER DELETE ON tasks BEGIN
+            INSERT INTO task_fts(task_fts, rowid, title, description, project, notes) VALUES('delete', old.id, old.title, old.description, old.project, old.notes);
+        END;
+
+        -- FTS5 sync triggers for notes
+        CREATE TRIGGER IF NOT EXISTS note_fts_ai AFTER INSERT ON notes BEGIN
+            INSERT INTO note_fts(rowid, title, content, topic) VALUES (new.id, new.title, new.content, new.topic);
+        END;
+        CREATE TRIGGER IF NOT EXISTS note_fts_ad AFTER DELETE ON notes BEGIN
+            INSERT INTO note_fts(note_fts, rowid, title, content, topic) VALUES('delete', old.id, old.title, old.content, old.topic);
+        END;
     """)
     conn.close()
     log.info("Memory database initialized")
@@ -189,11 +225,6 @@ def remember(content: str, mem_type: str = "fact", source: str = "", importance:
         (mem_type, content, source, importance, time.time())
     )
     mem_id = cur.lastrowid
-    # Update FTS
-    conn.execute(
-        "INSERT INTO memory_fts (rowid, content, type, source) VALUES (?, ?, ?, ?)",
-        (mem_id, content, mem_type, source)
-    )
     conn.commit()
     conn.close()
     log.info(f"Stored memory [{mem_type}]: {content[:60]}")
@@ -277,10 +308,6 @@ def create_task(title: str, description: str = "", priority: str = "medium",
          project, json.dumps(tags or []), time.time())
     )
     task_id = cur.lastrowid
-    conn.execute(
-        "INSERT INTO task_fts (rowid, title, description, project, notes) VALUES (?, ?, ?, ?, ?)",
-        (task_id, title, description, project, "")
-    )
     conn.commit()
     conn.close()
     log.info(f"Created task [{priority}]: {title}")
@@ -360,10 +387,6 @@ def create_note(content: str, title: str = "", topic: str = "", tags: list[str] 
         (title, content, topic, json.dumps(tags or []), now, now)
     )
     note_id = cur.lastrowid
-    conn.execute(
-        "INSERT INTO note_fts (rowid, title, content, topic) VALUES (?, ?, ?, ?)",
-        (note_id, title, content, topic)
-    )
     conn.commit()
     conn.close()
     log.info(f"Created note: {title or content[:40]}")
@@ -539,10 +562,6 @@ def store_turn(role: str, content: str):
         (role, content, time.time())
     )
     turn_id = cur.lastrowid
-    conn.execute(
-        "INSERT INTO conversation_fts (rowid, content) VALUES (?, ?)",
-        (turn_id, content)
-    )
     conn.commit()
     conn.close()
 
@@ -614,6 +633,7 @@ def build_memory_context(user_message: str) -> str:
         parts.append("HIGH PRIORITY TASKS:\n" + "\n".join(task_lines))
 
     # Search memories relevant to what user is saying
+    relevant = []
     if len(user_message) > 5:
         relevant = recall(user_message, limit=3)
         if relevant:
@@ -624,7 +644,7 @@ def build_memory_context(user_message: str) -> str:
     important = get_important_memories(limit=3)
     if important:
         imp_lines = [f"  - {m['content']}" for m in important
-                     if not any(m["content"] == r["content"] for r in (relevant if 'relevant' in dir() else []))]
+                     if not any(m["content"] == r["content"] for r in relevant)]
         if imp_lines:
             parts.append("KEY FACTS:\n" + "\n".join(imp_lines[:3]))
 
@@ -754,11 +774,11 @@ def analyze_weekly_patterns() -> str:
             feedback = dict(c.fetchall())
             
             # Analyze intents
-            c.execute("SELECT intent, COUNT(*) as cnt FROM interactions WHERE intent != '' GROUP BY intent ORDER BY cnt DESC LIMIT 3")
+            c.execute("SELECT user_intent, COUNT(*) as cnt FROM interactions WHERE user_intent != '' GROUP BY user_intent ORDER BY cnt DESC LIMIT 3")
             top_intents = c.fetchall()
             
             # Get last 5 corrections
-            c.execute("SELECT user_correction FROM learning_signals WHERE signal_type = 'correction' ORDER BY timestamp DESC LIMIT 5")
+            c.execute("SELECT correction_text FROM learning_signals WHERE signal_type = 'correction' ORDER BY timestamp DESC LIMIT 5")
             corrections = [r[0] for r in c.fetchall()]
             
             summary = ["Self-Improvement Analysis:"]

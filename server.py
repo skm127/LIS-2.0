@@ -30,7 +30,7 @@ from gtts import gTTS
 
 # New modular systems
 from llm_providers import LLMProviders
-from vector_memory import VectorMemory
+from rag_pipeline import RAGPipeline
 from react_engine import ReActEngine
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -1535,7 +1535,7 @@ dispatch_registry = DispatchRegistry()
 
 # ── New Modular Systems ──
 llm = LLMProviders()  # Unified LLM interface with 6-provider fallback
-vector_mem = VectorMemory()  # Semantic vector memory (RAG)
+rag = RAGPipeline()  # Unified RAG system (Vector + FTS)
 
 async def _react_skill_executor(skill_name: str, args: dict) -> dict:
     """Bridge for ReAct engine to execute skills."""
@@ -1916,14 +1916,14 @@ async def api_usage():
 @app.get("/api/memory/vector/stats")
 async def api_vector_memory_stats():
     """Get vector memory statistics."""
-    return vector_mem.get_stats()
+    return rag.get_stats()
 
 
 @app.get("/api/memory/vector/search")
 async def api_vector_memory_search(q: str, top_k: int = 5):
     """Semantic search across all vector memories."""
-    results = vector_mem.search(q, top_k=top_k)
-    return {"query": q, "results": results, "count": len(results)}
+    results = rag.query(q, top_k=top_k)
+    return {"query": q, "results": [{"text": r.text, "score": r.score, "metadata": r.metadata, "source": r.source} for r in results], "count": len(results)}
 
 
 @app.get("/api/llm/status")
@@ -2038,8 +2038,8 @@ def submit_feedback(req: FeedbackRequest):
     try:
         signal = "positive_feedback" if req.is_positive else "negative_feedback"
         memory.record_learning_signal(
-            user_text="UI Feedback",
-            lis_response=req.last_response,
+            user_msg="UI Feedback",
+            lis_resp=req.last_response,
             signal_type=signal
         )
         return {"status": "ok"}
@@ -2681,7 +2681,7 @@ async def _analyze_and_heal(skill_name: str, traceback_str: str):
     log.info(f"Self-healing protocol activated for skill {skill_name}")
     prompt = f"The skill '{skill_name}' just crashed with this traceback:\n{traceback_str}\n\nPlease analyze the error, explain what went wrong, and propose a code fix."
     try:
-        diagnosis = await llm.generate(prompt, system_prompt="You are LIS's internal error analyzer. Diagnose the crash and propose a fix.")
+        diagnosis = await llm.generate([{"role": "user", "content": prompt}], system="You are LIS's internal error analyzer. Diagnose the crash and propose a fix.")
         log.info(f"Diagnostic Report for {skill_name}:\n{diagnosis}")
         # In a fully autonomous mode, this could trigger `SubAgentSkill` to edit the file directly!
     except Exception as e:
@@ -3058,7 +3058,7 @@ async def voice_handler(ws: WebSocket):
                         # ── RAG: Augment with semantic vector memory ──
                         semantic_ctx = ""
                         try:
-                            semantic_ctx = vector_mem.build_context(user_text, max_items=5)
+                            semantic_ctx = rag.build_augmented_context(user_text, max_items=5).formatted_text
                         except Exception as e:
                             log.debug(f"Vector memory search skipped: {e}")
 
@@ -3174,10 +3174,10 @@ async def voice_handler(ws: WebSocket):
 
                     # ── RAG: Auto-embed in vector memory (background) ──
                     asyncio.create_task(asyncio.to_thread(
-                        vector_mem.store_conversation_turn, "user", user_text
+                        rag._get_vmem().store_conversation_turn, "user", user_text
                     ))
                     asyncio.create_task(asyncio.to_thread(
-                        vector_mem.store_conversation_turn, "assistant", response_text
+                        rag._get_vmem().store_conversation_turn, "assistant", response_text
                     ))
                     
                     history.append({"role": "assistant", "content": response_text})
