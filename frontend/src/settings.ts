@@ -30,6 +30,13 @@ interface PreferencesResponse {
   user_name: string;
   honorific: string;
   calendar_accounts: string;
+  enable_autonomous_learning: boolean;
+  lis_browser_headless: boolean;
+}
+
+interface LearnerStatusResponse {
+  is_running: boolean;
+  recent_topics: { topic: string; url: string; ingested_at: number }[];
 }
 
 // ---------------------------------------------------------------------------
@@ -40,6 +47,7 @@ let panelEl: HTMLElement | null = null;
 let isOpen = false;
 let isFirstTimeSetup = false;
 let setupStep = 0; // 0=anthropic, 1=fish, 2=name, 3=done
+let _learnerPollInterval = 0;
 
 // ---------------------------------------------------------------------------
 // API helpers
@@ -153,6 +161,35 @@ function buildPanelHTML(): string {
           </div>
         </section>
 
+        <!-- Autonomous Learning -->
+        <section class="settings-section" id="section-learner">
+          <h3>Autonomous Learning</h3>
+          
+          <div class="settings-field" style="display:flex; align-items:center; gap:8px;">
+            <input type="checkbox" id="input-learner-enable" />
+            <label for="input-learner-enable" style="margin:0;">Enable Background Autonomous Learning</label>
+          </div>
+          
+          <div class="settings-field" style="display:flex; align-items:center; gap:8px;">
+            <input type="checkbox" id="input-learner-headless" />
+            <label for="input-learner-headless" style="margin:0;">Run Browser Headless (Hidden)</label>
+          </div>
+          
+          <div class="settings-field">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <span id="learner-status-indicator" style="font-weight:bold; color:var(--text-color);">Status: Checking...</span>
+              <button class="settings-btn" id="btn-learner-stop" style="display:none; color: #ff5555; border-color: #ff5555;">Stop Current Cycle</button>
+            </div>
+          </div>
+          
+          <div class="settings-field">
+            <label>Recently Learned Topics</label>
+            <div id="learner-topics-list" style="max-height: 150px; overflow-y: auto; background: rgba(0,0,0,0.2); padding: 8px; border-radius: 4px; font-size: 0.85rem;">
+              Loading...
+            </div>
+          </div>
+        </section>
+
         <!-- System Info -->
         <section class="settings-section" id="section-sysinfo">
           <h3>System Info</h3>
@@ -242,13 +279,81 @@ async function loadPreferences() {
     const nameEl = document.getElementById("input-user-name") as HTMLInputElement;
     const honEl = document.getElementById("input-honorific") as HTMLSelectElement;
     const calEl = document.getElementById("input-calendar-accounts") as HTMLTextAreaElement;
+    const learnerEnableEl = document.getElementById("input-learner-enable") as HTMLInputElement;
+    const learnerHeadlessEl = document.getElementById("input-learner-headless") as HTMLInputElement;
     if (nameEl) nameEl.value = prefs.user_name || "";
     if (honEl) honEl.value = prefs.honorific || "sir";
     if (calEl) calEl.value = prefs.calendar_accounts || "auto";
+    if (learnerEnableEl) learnerEnableEl.checked = prefs.enable_autonomous_learning;
+    if (learnerHeadlessEl) learnerHeadlessEl.checked = prefs.lis_browser_headless;
   } catch (e) {
     console.error("[settings] failed to load preferences:", e);
   }
 }
+
+async function loadLearnerStatus() {
+  if (!isOpen) return;
+  try {
+    const status = await apiGet<LearnerStatusResponse>("/api/learner/status");
+    const ind = document.getElementById("learner-status-indicator");
+    const stopBtn = document.getElementById("btn-learner-stop");
+    if (ind) {
+      if (status.is_running) {
+        ind.textContent = "Status: Learning in progress...";
+        ind.style.color = "#ffff55";
+        if (stopBtn) stopBtn.style.display = "inline-block";
+      } else {
+        ind.textContent = "Status: Idle";
+        ind.style.color = "var(--text-color)";
+        if (stopBtn) stopBtn.style.display = "none";
+      }
+    }
+    
+    const listEl = document.getElementById("learner-topics-list");
+    if (listEl) {
+      if (!status.recent_topics || status.recent_topics.length === 0) {
+        listEl.innerHTML = "<em>No topics learned yet.</em>";
+      } else {
+        listEl.innerHTML = status.recent_topics.map(t => {
+          const d = new Date(t.ingested_at * 1000).toLocaleString();
+          return `
+            <div style="display:flex; justify-content:space-between; align-items:center; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 4px; margin-bottom: 4px;">
+              <div style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+                <strong>${t.topic}</strong><br/>
+                <span style="opacity:0.6; font-size:0.75rem;">${d}</span>
+              </div>
+              <button class="settings-btn btn-delete-memory" data-url="${t.url}" style="padding: 2px 6px; font-size: 0.75rem; border-color:#ff5555; color:#ff5555;">&times; Delete</button>
+            </div>
+          `;
+        }).join("");
+        
+        // Bind delete buttons
+        document.querySelectorAll(".btn-delete-memory").forEach(btn => {
+          btn.addEventListener("click", async (e) => {
+            const url = (e.currentTarget as HTMLButtonElement).dataset.url;
+            if (url) {
+              await apiDelete("/api/learner/memory", { url });
+              await loadLearnerStatus();
+            }
+          });
+        });
+      }
+    }
+  } catch (e) {
+    console.error("[settings] failed to load learner status:", e);
+  }
+}
+
+// Helper to do DELETE requests
+async function apiDelete<T>(url: string, body: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return res.json();
+}
+
 
 function wireEvents() {
   // Close
@@ -306,8 +411,20 @@ function wireEvents() {
     const user_name = (document.getElementById("input-user-name") as HTMLInputElement).value.trim();
     const honorific = (document.getElementById("input-honorific") as HTMLSelectElement).value;
     const calendar_accounts = (document.getElementById("input-calendar-accounts") as HTMLTextAreaElement).value.trim();
-    await apiPost("/api/settings/preferences", { user_name, honorific, calendar_accounts });
+    const enable_autonomous_learning = (document.getElementById("input-learner-enable") as HTMLInputElement).checked;
+    const lis_browser_headless = (document.getElementById("input-learner-headless") as HTMLInputElement).checked;
+    
+    await apiPost("/api/settings/preferences", { 
+      user_name, honorific, calendar_accounts, 
+      enable_autonomous_learning, lis_browser_headless 
+    });
     await loadStatus();
+  });
+  
+  // Stop learner
+  document.getElementById("btn-learner-stop")?.addEventListener("click", async () => {
+    await apiPost("/api/learner/stop", {});
+    await loadLearnerStatus();
   });
 
   // Setup next button
@@ -403,11 +520,21 @@ export async function openSettings() {
   if (status && !status.env_keys_set.anthropic) {
     enterSetupMode();
   }
+  
+  // Start polling learner status
+  await loadLearnerStatus();
+  _learnerPollInterval = window.setInterval(loadLearnerStatus, 3000);
 }
 
 export function closeSettings() {
   if (!panelEl || !isOpen) return;
   isOpen = false;
+  
+  if (_learnerPollInterval) {
+    clearInterval(_learnerPollInterval);
+    _learnerPollInterval = 0;
+  }
+  
   panelEl.classList.remove("open");
   setTimeout(() => {
     if (panelEl) panelEl.style.display = "none";

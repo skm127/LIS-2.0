@@ -14,6 +14,7 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+import models
 
 import anthropic
 
@@ -129,7 +130,7 @@ async def _classify_planning_mode_llm(
     """Use Haiku to classify request and identify missing info."""
     try:
         response = await client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model=models.HAIKU,
             max_tokens=400,
             system=(
                 "You analyze development requests to decide if they need planning.\n"
@@ -677,7 +678,7 @@ class TaskPlanner:
         """Use Haiku to classify request type and extract known info."""
         try:
             response = await client.messages.create(
-                model="claude-haiku-4-5-20251001",
+                model=models.HAIKU,
                 max_tokens=300,
                 system=(
                     "Classify this development request. Respond with JSON only, no markdown.\n"

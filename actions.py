@@ -1,5 +1,5 @@
 """
-LIS Action Executor — AppleScript-based system actions.
+LIS Action Executor — Windows system actions.
 
 Execute actions IMMEDIATELY, before generating any LLM response.
 Each function returns {"success": bool, "confirmation": str}.
@@ -12,6 +12,8 @@ import re
 import time
 from pathlib import Path
 from urllib.parse import quote
+import webbrowser
+import shlex
 
 log = logging.getLogger("LIS.actions")
 
@@ -32,17 +34,21 @@ async def open_terminal(command: str = "") -> dict:
     """Open Windows Command Prompt and optionally run a command."""
     try:
         if command:
-            # cmd /k keeps the window open after execution
-            cmd_proc = f'start cmd.exe /k "{command}"'
+            # Reject shell metacharacters to prevent injection
+            dangerous_chars = set('&|><^%"\'')
+            if any(c in command for c in dangerous_chars):
+                return {"success": False, "confirmation": "That command contains unsafe characters, sir. I can't execute it."}
+            proc = await asyncio.create_subprocess_exec(
+                "cmd.exe", "/c", "start", "cmd.exe", "/k", command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
         else:
-            cmd_proc = 'start cmd.exe'
-        
-        # Use shell=True for 'start' command on Windows
-        proc = await asyncio.create_subprocess_shell(
-            cmd_proc,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+            proc = await asyncio.create_subprocess_exec(
+                "cmd.exe", "/c", "start", "cmd.exe",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
         await proc.communicate()
         return {
             "success": True,
@@ -57,14 +63,10 @@ async def open_terminal(command: str = "") -> dict:
 async def open_browser(url: str, browser: str = "msedge") -> dict:
     """Open URL in user's default browser on Windows."""
     try:
-        # 'start' uses the default browser associated with HTTP/HTTPS
-        cmd = f'start "" "{url}"'
-        proc = await asyncio.create_subprocess_shell(
-            cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        await proc.communicate()
+        if browser == "firefox":
+            webbrowser.get("firefox").open(url)
+        else:
+            webbrowser.open(url)
         return {
             "success": True,
             "confirmation": f"Pulled that up for you, sir.",
@@ -81,16 +83,23 @@ async def open_chrome(url: str) -> dict:
 
 async def open_claude_in_project(project_dir: str, prompt: str) -> dict:
     """Open cmd, cd to project dir, run Claude Code interactively on Windows."""
+    import os as _os
+    # Validate project_dir is a real, safe path
+    project_path = Path(project_dir).resolve()
+    allowed_bases = [Path.home() / "Desktop", Path.home() / "Documents", Path.home()]
+    if not any(str(project_path).startswith(str(base.resolve())) for base in allowed_bases):
+        return {"success": False, "confirmation": "That project directory is outside allowed locations, sir."}
+
     # Write prompt to CLAUDE.md — claude reads this automatically
-    claude_md = Path(project_dir) / "CLAUDE.md"
+    claude_md = project_path / "CLAUDE.md"
     claude_md.write_text(f"# Task\n\n{prompt}\n\nBuild this completely. If web app, make index.html work standalone.\n")
 
     try:
-        # Launch claude interactive — it reads CLAUDE.md on its own
-        # Using /d for cd to handle drive changes correctly on Windows
-        cmd = f'start cmd.exe /k "cd /d {project_dir} && claude --dangerously-skip-permissions"'
-        proc = await asyncio.create_subprocess_shell(
-            cmd,
+        skip_flag = _os.getenv("CLAUDE_SKIP_PERMISSIONS", "false").lower() == "true"
+        cmd_args = ["cmd.exe", "/c", "start", "cmd.exe", "/k",
+                    f"cd /d {str(project_path)} && claude" + (" --dangerously-skip-permissions" if skip_flag else "")]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd_args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -148,7 +157,7 @@ async def monitor_build(project_dir: str, ws=None, synthesize_fn=None) -> None:
     log.warning(f"Build timed out in {project_dir}")
 
 
-async def execute_action(intent: dict, projects: list = None) -> dict:
+async def execute_action(intent: dict, projects: list = None, confirmed: bool = False) -> dict:
     """Route a classified intent to the right action function.
 
     Args:
@@ -161,10 +170,11 @@ async def execute_action(intent: dict, projects: list = None) -> dict:
     target = intent.get("target", "")
 
     if action == "open_terminal":
-        # Security Safeguard
-        if not re.search(r'\b(yes|confirm|confirmed|proceed|do it)\b', target.lower()):
-            return {"success": False, "confirmation": "This is a high-stakes terminal action. Please ask the user to explicitly confirm they want to execute this command.", "project_dir": None}
-            
+        # Two-turn confirmation: require explicit confirmation from a prior turn
+        if not confirmed:
+            return {"success": False, "needs_confirmation": True,
+                    "confirmation": "This will open a terminal with elevated permissions. Please confirm you'd like to proceed, sir.",
+                    "project_dir": None}
         result = await open_terminal("claude --dangerously-skip-permissions")
         result["project_dir"] = None
         return result
@@ -187,10 +197,11 @@ async def execute_action(intent: dict, projects: list = None) -> dict:
         return result
 
     elif action == "build":
-        # Security Safeguard
-        if not re.search(r'\b(yes|confirm|confirmed|proceed|do it)\b', target.lower()):
-            return {"success": False, "confirmation": "This is a high-stakes build action. Please ask the user to explicitly confirm they want to spawn this project.", "project_dir": None}
-            
+        # Two-turn confirmation: require explicit confirmation from a prior turn
+        if not confirmed:
+            return {"success": False, "needs_confirmation": True,
+                    "confirmation": "This will spawn a new Claude Code build. Please confirm you'd like to proceed, sir.",
+                    "project_dir": None}
         # Create project folder on Desktop, spawn Claude Code
         project_name = _generate_project_name(target)
         project_dir = str(DESKTOP_PATH / project_name)

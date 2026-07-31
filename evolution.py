@@ -18,7 +18,7 @@ import yaml
 log = logging.getLogger("LIS.evolution")
 
 TEMPLATES_DIR = Path(__file__).parent / "templates" / "prompts"
-DB_PATH = Path(__file__).parent / "lis_data.db"
+DB_PATH = Path(__file__).parent / "data" / "lis.db"
 
 # Common failure patterns and their fixes
 FAILURE_PATTERNS = {
@@ -84,13 +84,32 @@ class TemplateEvolver:
     def __init__(self, db_path: str = None, templates_dir: str = None):
         self.db_path = db_path or str(DB_PATH)
         self.templates_dir = Path(templates_dir) if templates_dir else TEMPLATES_DIR
+        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(self.db_path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
+        self._create_tables()
+
+    def _create_tables(self):
+        self.db.executescript("""
+            CREATE TABLE IF NOT EXISTS task_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, task_type TEXT NOT NULL,
+                prompt TEXT NOT NULL, success INTEGER NOT NULL,
+                retry_count INTEGER DEFAULT 0, duration_seconds REAL DEFAULT 0,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS experiments (
+                id TEXT PRIMARY KEY, task_type TEXT NOT NULL, template_version TEXT NOT NULL,
+                success INTEGER DEFAULT NULL, created_at TEXT NOT NULL, completed_at TEXT DEFAULT NULL
+            );
+        """)
+        self.db.commit()
 
     def analyze_failures(self, task_type: str) -> FailureAnalysis:
         """Analyze failed tasks to identify common issues and patterns."""
         issues = []
         patterns_found = []
+        suggested = []
+        total_failures = 0
 
         try:
             # Get failed tasks from task_log
@@ -140,7 +159,7 @@ class TemplateEvolver:
             total_failures=total_failures,
             common_issues=issues,
             failure_patterns=patterns_found,
-            suggested_improvements=suggested if suggested else ["No patterns detected — more data needed"],
+            suggested_improvements=suggested or ["No patterns detected — more data needed"],
         )
 
     def suggest_improvements(self, task_type: str) -> list[Improvement]:

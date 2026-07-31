@@ -10,6 +10,7 @@ import json
 import asyncio
 import time
 from typing import Optional, List
+import models
 
 log = logging.getLogger("lis.brain")
 
@@ -44,7 +45,7 @@ class CognitiveCore:
         # Try Anthropic first
         try:
             response = await self.client.messages.create(
-                model="claude-haiku-4-5-20251001",
+                model=models.HAIKU,
                 max_tokens=100,
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_content}]
@@ -167,7 +168,7 @@ class CognitiveCore:
 
         try:
             response = await self.client.messages.create(
-                model="claude-haiku-4-5-20251001",
+                model=models.HAIKU,
                 max_tokens=250,
                 system=(
                     "Reflect on the task just completed. "

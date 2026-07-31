@@ -17,13 +17,8 @@ from datetime import datetime
 from pathlib import Path
 
 # Load .env
-env_path = Path(__file__).parent / ".env"
-if env_path.exists():
-    for line in env_path.read_text().splitlines():
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            k, _, v = line.partition("=")
-            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+from env_loader import load_env
+load_env()
 
 
 class ConversationMonitor:
@@ -42,7 +37,7 @@ class ConversationMonitor:
         self.analyze_latest()
 
     def analyze_latest(self):
-        if len(self.messages) < 2:
+        if not self.messages:
             return
 
         latest = self.messages[-1]

@@ -11,6 +11,8 @@ import base64
 import io
 import json
 import logging
+import typing
+import models
 from pathlib import Path
 
 log = logging.getLogger("lis.screen")
@@ -125,7 +127,7 @@ async def describe_screen(anthropic_client=None) -> str:
         if anthropic_client:
             try:
                 response = await anthropic_client.messages.create(
-                    model="claude-haiku-4-5-20251001",
+                    model=models.HAIKU,
                     max_tokens=300,
                     system=(
                         "You are LIS analyzing a screenshot of the user's desktop. "

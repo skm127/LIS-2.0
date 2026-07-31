@@ -44,7 +44,7 @@ def discover_plugins() -> int:
         return 0
 
     loaded = 0
-    for file in PLUGINS_DIR.glob("*.py"):
+    for file in PLUGINS_DIR.rglob("*.py"):
         if file.name.startswith("_"):
             continue  # Skip __init__.py, __pycache__, etc.
 

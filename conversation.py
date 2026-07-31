@@ -148,7 +148,7 @@ class PlanningSession:
             # "add a contact form"
             feature = mod_lower.replace("add", "").replace("a ", "").strip()
             self.current_plan.features.append(feature)
-            self.add_decision("feature_added", feature)
+            self.decisions.append(Decision(key="feature_added", value=feature))
 
         elif "remove" in mod_lower:
             # "remove the pricing section"
@@ -157,7 +157,7 @@ class PlanningSession:
                 f for f in self.current_plan.features
                 if to_remove not in f.lower()
             ]
-            self.add_decision("feature_removed", to_remove)
+            self.decisions.append(Decision(key="feature_removed", value=to_remove))
 
         elif "change" in mod_lower:
             # "change the project name to Acme"

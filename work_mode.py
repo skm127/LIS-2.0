@@ -12,6 +12,7 @@ LIS reads the responses via subprocess, summarizes, and reports back.
 import asyncio
 import json
 import logging
+import os
 import shutil
 from pathlib import Path
 
@@ -79,8 +80,9 @@ class WorkSession:
         cmd = [
             claude_path, "-p",
             "--output-format", "text",
-            "--dangerously-skip-permissions",
         ]
+        if os.getenv("CLAUDE_SKIP_PERMISSIONS", "false").lower() == "true":
+            cmd.append("--dangerously-skip-permissions")
 
         # Use --continue for subsequent messages to maintain context
         if self._message_count > 0:

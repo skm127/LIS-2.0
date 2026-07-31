@@ -78,6 +78,16 @@ class LISScheduler:
             days=["mon", "tue", "wed", "thu", "fri"],
             action="eod_summary",
         ))
+        
+        # Add Autonomous Learning cycle every 4 hours (e.g., 2, 6, 10, 14, 18, 22)
+        for hr in range(2, 24, 4):
+            self.routines.append(ScheduledRoutine(
+                name=f"Autonomous Learning (Hour {hr})",
+                hour=hr, minute=0,
+                days=["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+                action="autonomous_learning",
+            ))
+            
         log.info(f"Scheduler initialized with {len(self.routines)} default routines")
 
     def set_voice_queue(self, queue: asyncio.Queue):
@@ -168,17 +178,21 @@ class LISScheduler:
                 text = await self._build_morning_briefing()
             elif routine.action == "eod_summary":
                 text = await self._build_eod_summary()
+            elif routine.action == "autonomous_learning":
+                import autonomous_learner
+                autonomous_learner.trigger_learning_cycle()
+                text = "Autonomous learning cycle triggered."
             elif routine.action.startswith("say:"):
                 text = routine.action[4:].strip()
             else:
                 text = f"Routine '{routine.name}' triggered."
 
-            # Send to voice queue if connected
-            if self._voice_queue:
+            # Send to voice queue if connected (skip for background tasks like learning)
+            if self._voice_queue and routine.action != "autonomous_learning":
                 await self._voice_queue.put(text)
                 log.info(f"Routine dispatched to voice: {text[:80]}")
             else:
-                log.warning(f"No voice queue connected, routine text: {text[:80]}")
+                log.info(f"Routine executed silently: {text[:80]}")
 
         except Exception as e:
             log.error(f"Routine execution failed: {e}")

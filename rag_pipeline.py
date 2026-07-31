@@ -146,7 +146,11 @@ def chunk_text_semantic(
     # Detect current section title from headers
     header_pattern = re.compile(r'^(#{1,6})\s+(.+)$', re.MULTILINE)
 
+    max_iterations = len(text) // max(min_chunk_size, 1) + 10
+    iteration = 0
     while current_pos < len(text):
+        iteration += 1
+        if iteration > max_iterations: break
         # Find the end of this chunk
         chunk_words = text[current_pos:].split()
         if len(chunk_words) <= chunk_size:
@@ -208,9 +212,10 @@ def chunk_text_semantic(
                     overlap_chars = end_pos - i
                     break
 
+        previous_pos = current_pos
         current_pos = end_pos - overlap_chars
-        if current_pos <= chunks[-1]["start_char"] if chunks else 0:
-            current_pos = end_pos  # Prevent infinite loop
+        if current_pos <= previous_pos:
+            current_pos = end_pos  # Force forward progress
 
     return chunks
 

@@ -20,6 +20,7 @@ Usage:
 
 import logging
 import os
+import models
 import time
 from typing import Optional, Callable
 
@@ -38,6 +39,7 @@ class LLMProviders:
         self.gemini_key = os.getenv("GEMINI_API_KEY", "")
         self.cerebras_key = os.getenv("CEREBRAS_API_KEY", "")
         self.openrouter_key = os.getenv("OPENROUTER_API_KEY", "")
+        self.nvidia_key = os.getenv("NVIDIA_API_KEY", "")
         self.ollama_url = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
 
         # Circuit breakers — mark dead APIs to skip instantly
@@ -47,6 +49,7 @@ class LLMProviders:
             "gemini": False,
             "cerebras": False,
             "openrouter": False,
+            "nvidia": False,
         }
 
         # Anthropic client (initialized lazily)
@@ -82,7 +85,7 @@ class LLMProviders:
     # ═══════════════════════════════════════════════════════════════════
 
     async def _generate_anthropic(
-        self, messages: list[dict], system: str = "", max_tokens: int = 1000, model: str = "claude-3-5-haiku-20241022"
+        self, messages: list[dict], system: str = "", max_tokens: int = 1000, model: str = models.HAIKU
     ) -> Optional[str]:
         """Generate via Anthropic Claude API."""
         if self.dead.get("anthropic") or not self.anthropic_client:
@@ -132,7 +135,7 @@ class LLMProviders:
                         "Content-Type": "application/json",
                     },
                     json={
-                        "model": "llama-3.3-70b-versatile",
+                        "model": models.GROQ_DEFAULT,
                         "messages": full_messages,
                         "max_completion_tokens": max_tokens,
                     },
@@ -155,7 +158,7 @@ class LLMProviders:
             return None
 
         log.info("Using Gemini fallback...")
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={self.gemini_key}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{models.GEMINI_DEFAULT}:generateContent?key={self.gemini_key}"
 
         # Convert messages to Gemini format
         parts = []
@@ -210,7 +213,7 @@ class LLMProviders:
                         "Content-Type": "application/json",
                     },
                     json={
-                        "model": "llama3.1-8b",
+                        "model": models.CEREBRAS_DEFAULT,
                         "messages": full_messages,
                         "max_completion_tokens": max_tokens,
                     },
@@ -226,6 +229,46 @@ class LLMProviders:
                     return None
         except Exception as e:
             log.error(f"Cerebras exception: {e}")
+            return None
+
+    async def _generate_nvidia(
+        self, messages: list[dict], system: str = "", max_tokens: int = 1024
+    ) -> Optional[str]:
+        """Generate via NVIDIA NeMo (NIM) API (GPU-accelerated, OpenAI-compatible)."""
+        if not self.nvidia_key or self.dead.get("nvidia"):
+            return None
+
+        log.info("Using NVIDIA fallback...")
+        full_messages = []
+        if system:
+            full_messages.append({"role": "system", "content": system[:4000]})
+        full_messages.extend(messages[-10:])
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(
+                    "https://integrate.api.nvidia.com/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.nvidia_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": models.NVIDIA_DEFAULT,
+                        "messages": full_messages,
+                        "max_tokens": max_tokens,
+                    },
+                )
+                if resp.status_code == 200:
+                    self._track_usage(0, 0, "nvidia")
+                    return resp.json()["choices"][0]["message"]["content"]
+                elif resp.status_code in [401, 403]:
+                    self.dead["nvidia"] = True
+                    return None
+                else:
+                    log.error(f"NVIDIA API error: {resp.status_code}")
+                    return None
+        except Exception as e:
+            log.error(f"NVIDIA exception: {e}")
             return None
 
     async def _generate_openrouter(
@@ -252,7 +295,7 @@ class LLMProviders:
                         "X-Title": "LIS AI",
                     },
                     json={
-                        "model": "meta-llama/llama-3.1-8b-instruct:free",
+                        "model": models.OPENROUTER_DEFAULT,
                         "messages": full_messages,
                         "max_tokens": max_tokens,
                     },
@@ -289,7 +332,7 @@ class LLMProviders:
                 resp = await client.post(
                     f"{self.ollama_url}/api/chat",
                     json={
-                        "model": "llama3.2:3b",
+                        "model": models.OLLAMA_DEFAULT,
                         "messages": full_messages,
                         "stream": False,
                     },
@@ -313,7 +356,7 @@ class LLMProviders:
         messages: list[dict],
         system: str = "",
         max_tokens: int = 1000,
-        model: str = "claude-3-5-haiku-20241022",
+        model: str = models.HAIKU,
         prefer_provider: Optional[str] = None,
     ) -> str:
         """Generate text with 6-provider fallback chain.
@@ -336,6 +379,7 @@ class LLMProviders:
                 "gemini": self._generate_gemini,
                 "cerebras": self._generate_cerebras,
                 "openrouter": self._generate_openrouter,
+                "nvidia": self._generate_nvidia,
                 "ollama": self._generate_ollama,
             }
             fn = provider_map.get(prefer_provider)
@@ -355,6 +399,7 @@ class LLMProviders:
             ("Gemini", self._generate_gemini),
             ("Cerebras", self._generate_cerebras),
             ("OpenRouter", self._generate_openrouter),
+            ("NVIDIA", self._generate_nvidia),
             ("Ollama", self._generate_ollama),
         ]
 
@@ -401,5 +446,6 @@ class LLMProviders:
             "gemini": {"configured": bool(self.gemini_key), "dead": self.dead.get("gemini", False)},
             "cerebras": {"configured": bool(self.cerebras_key), "dead": self.dead.get("cerebras", False)},
             "openrouter": {"configured": bool(self.openrouter_key), "dead": self.dead.get("openrouter", False)},
+            "nvidia": {"configured": bool(self.nvidia_key), "dead": self.dead.get("nvidia", False)},
             "ollama": {"configured": True, "dead": False},  # Always available if running
         }

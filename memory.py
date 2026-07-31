@@ -16,6 +16,7 @@ import sqlite3
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
+import models
 
 log = logging.getLogger("lis.memory")
 
@@ -715,7 +716,7 @@ async def extract_memories(user_text: str, lis_response: str, anthropic_client) 
 
     try:
         response = await anthropic_client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model=models.HAIKU,
             max_tokens=300,
             system=(
                 "Extract facts worth remembering from this conversation. "
@@ -765,38 +766,42 @@ async def extract_memories(user_text: str, lis_response: str, anthropic_client) 
 
 def analyze_weekly_patterns() -> str:
     """Analyze learning signals and interactions to return a self-improvement summary."""
+    conn = None
     try:
-        with _get_db() as conn:
-            c = conn.cursor()
-            
-            # Analyze feedback
-            c.execute("SELECT signal_type, COUNT(*) FROM learning_signals GROUP BY signal_type")
-            feedback = dict(c.fetchall())
-            
-            # Analyze intents
-            c.execute("SELECT user_intent, COUNT(*) as cnt FROM interactions WHERE user_intent != '' GROUP BY user_intent ORDER BY cnt DESC LIMIT 3")
-            top_intents = c.fetchall()
-            
-            # Get last 5 corrections
-            c.execute("SELECT correction_text FROM learning_signals WHERE signal_type = 'correction' ORDER BY timestamp DESC LIMIT 5")
-            corrections = [r[0] for r in c.fetchall()]
-            
-            summary = ["Self-Improvement Analysis:"]
-            if feedback:
-                summary.append(f"- Feedback Profile: {feedback}")
-            if top_intents:
-                summary.append(f"- Top User Intents: {', '.join([f'{i[0]} ({i[1]})' for i in top_intents])}")
-            if corrections:
-                summary.append("- Recent Corrections to Learn From:")
-                for corr in corrections:
-                    summary.append(f"  * {corr}")
-                    
-            if len(summary) > 1:
-                return "\n".join(summary)
-            return "Not enough data for self-improvement analysis yet."
+        conn = _get_db()
+        c = conn.cursor()
+        
+        # Analyze feedback
+        c.execute("SELECT signal_type, COUNT(*) FROM learning_signals GROUP BY signal_type")
+        feedback = dict(c.fetchall())
+        
+        # Analyze intents
+        c.execute("SELECT user_intent, COUNT(*) as cnt FROM interactions WHERE user_intent != '' GROUP BY user_intent ORDER BY cnt DESC LIMIT 3")
+        top_intents = c.fetchall()
+        
+        # Get last 5 corrections
+        c.execute("SELECT correction_text FROM learning_signals WHERE signal_type = 'correction' ORDER BY timestamp DESC LIMIT 5")
+        corrections = [r[0] for r in c.fetchall()]
+        
+        summary = ["Self-Improvement Analysis:"]
+        if feedback:
+            summary.append(f"- Feedback Profile: {feedback}")
+        if top_intents:
+            summary.append(f"- Top User Intents: {', '.join([f'{i[0]} ({i[1]})' for i in top_intents])}")
+        if corrections:
+            summary.append("- Recent Corrections to Learn From:")
+            for corr in corrections:
+                summary.append(f"  * {corr}")
+                
+        if len(summary) > 1:
+            return "\n".join(summary)
+        return "Not enough data for self-improvement analysis yet."
     except Exception as e:
         log.error(f"Pattern analysis failed: {e}")
         return "Analysis unavailable."
+    finally:
+        if conn:
+            conn.close()
 
 
 def get_context_summary() -> str:

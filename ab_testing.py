@@ -20,7 +20,7 @@ import yaml
 log = logging.getLogger("LIS.ab_testing")
 
 TEMPLATES_DIR = Path(__file__).parent / "templates" / "prompts"
-DB_PATH = Path(__file__).parent / "LIS_data.db"
+DB_PATH = Path(__file__).parent / "data" / "lis.db"
 
 # Minimum tasks per version before declaring a winner
 MIN_TASKS_FOR_WINNER = 20
@@ -66,6 +66,7 @@ class ABTester:
     def __init__(self, db_path: str = None, templates_dir: str = None):
         self.db_path = db_path or str(DB_PATH)
         self.templates_dir = Path(templates_dir) if templates_dir else TEMPLATES_DIR
+        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(self.db_path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self._create_tables()

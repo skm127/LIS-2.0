@@ -331,6 +331,7 @@ class VectorMemory:
         vector_weight: float = 0.6,
         fts_weight: float = 0.4,
         min_score: float = 0.3,
+        min_rrf_score: float = 0.002,
     ) -> list[dict]:
         """Hybrid search combining vector similarity with FTS5 keyword results.
 
@@ -387,7 +388,7 @@ class VectorMemory:
         return [
             {"text": r["text"], "score": round(r["score"], 4), "metadata": r["metadata"], "sources": r["sources"]}
             for r in results[:top_k]
-            if r["score"] >= min_score * 0.01  # RRF scores are much smaller than raw similarity
+            if r["score"] >= min_rrf_score  # RRF scores are on a different scale (~0.001-0.01)
         ]
 
     def get_all_sources(self) -> list[str]:

@@ -70,6 +70,13 @@ python server.py --port 8340
 
 Then open **Microsoft Edge** → `http://localhost:8340`
 
+### SSL (Optional)
+For HTTPS support, generate self-signed certificates:
+```bash
+openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes
+```
+Then run with `--ssl` flag or place `key.pem`/`cert.pem` in the project root for auto-detection.
+
 ### One-Click Launch
 
 ```powershell

@@ -9,6 +9,7 @@ Handles:
 """
 
 import asyncio
+import queue
 import base64
 import json
 import logging
@@ -28,6 +29,9 @@ import memory
 import edge_tts
 from gtts import gTTS
 
+import plugin_loader
+plugin_loader.discover_plugins()
+
 # New modular systems
 from llm_providers import LLMProviders
 from rag_pipeline import RAGPipeline
@@ -40,13 +44,9 @@ from empathy import EmpathyEngine, STATES
 from brain import CognitiveCore
 
 # Load .env file if present
-_env_path = Path(__file__).parent / ".env"
-if _env_path.exists():
-    for _line in _env_path.read_text().splitlines():
-        _line = _line.strip()
-        if _line and not _line.startswith("#") and "=" in _line:
-            _k, _, _v = _line.partition("=")
-            os.environ.setdefault(_k.strip(), _v.strip().strip('"').strip("'"))
+from env_loader import load_env
+load_env()
+import models  # Centralised model ID constants
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
@@ -80,7 +80,14 @@ from qa import QAAgent
 from tracking import SuccessTracker
 from suggestions import suggest_followup
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
+log_path = Path(__file__).parent / "data" / "lis_errors.log"
+log_path.parent.mkdir(parents=True, exist_ok=True)
+fh = logging.FileHandler(str(log_path))
+fh.setLevel(logging.ERROR)
+fh.setFormatter(logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s"))
+sh = logging.StreamHandler()
+sh.setFormatter(logging.Formatter("%(asctime)s [%(name)s] %(message)s"))
+logging.basicConfig(level=logging.INFO, handlers=[sh, fh])
 log = logging.getLogger("lis")
 qa_agent = QAAgent()
 success_tracker = SuccessTracker()
@@ -271,7 +278,7 @@ class ClaudeTaskManager:
         self._max_concurrent = max_concurrent
         self._processes: dict[str, asyncio.subprocess.Process] = {}
         self._websockets: list[WebSocket] = []  # for push notifications
-        self._voice_queue = asyncio.Queue()  # for proactive notifications
+        self._voice_queue: queue.Queue = queue.Queue()  # thread-safe for cross-thread notifications
 
     def register_websocket(self, ws: WebSocket):
         if ws not in self._websockets:
@@ -293,16 +300,12 @@ class ClaudeTaskManager:
             self._websockets.remove(ws)
 
     def push_voice_notification(self, text: str):
-        """Queue a voice notification to be spoken by LIS proactively."""
-        # This is called from the synchronous background worker.
-        # We'll use the _notify system to tell the frontend to 'speak' this text.
-        # Since I am in a thread, I need to use run_coroutine_threadsafe if needed,
-        # but here I can just use a queue or directly call it if I'm already in an async context.
-        # Actually, the _worker runs in a thread. I'll use a queue.
-        if hasattr(self, "_voice_queue"):
-            self._voice_queue.put_nowait(text)
-        else:
-            log.warning("Voice queue not initialized")
+        """Queue a voice notification to be spoken by LIS proactively.
+        
+        Thread-safe: uses stdlib queue.Queue so _worker() (plain OS thread)
+        can safely enqueue without corrupting asyncio internals.
+        """
+        self._voice_queue.put_nowait(text)
 
     async def spawn(self, prompt: str, working_dir: str = ".") -> str:
         """Spawn a claude -p subprocess. Returns task_id. Non-blocking."""
@@ -335,15 +338,8 @@ class ClaudeTaskManager:
         return task_id
 
     def _generate_project_name(self, prompt: str) -> str:
-        """Generate a kebab-case project folder name from the prompt."""
-        import re
-        # Extract key words
-        words = re.sub(r'[^a-zA-Z0-9\s]', '', prompt.lower()).split()
-        # Take first 3-4 meaningful words
-        skip = {"a", "the", "an", "me", "build", "create", "make", "for", "with", "and", "to", "of"}
-        meaningful = [w for w in words if w not in skip][:4]
-        name = "-".join(meaningful) if meaningful else "lis-project"
-        return name
+        """Delegate to the canonical implementation in actions.py."""
+        return _generate_project_name(prompt)
 
     async def _run_task(self, task: ClaudeTask):
         """Open a Terminal window and run claude code visibly."""
@@ -364,10 +360,13 @@ class ClaudeTaskManager:
         prompt_file.write_text(task.prompt)
 
         # Open Windows cmd with claude running in the project directory
-        cmd = f'start cmd.exe /k "cd /d {work_dir} && type .lis_prompt.md | claude -p --dangerously-skip-permissions > .lis_output.txt 2>&1 && echo --- LIS TASK COMPLETE ---"'
-
-        process = await asyncio.create_subprocess_shell(
-            cmd,
+        # Validate work_dir to prevent path traversal
+        work_path = Path(work_dir).resolve()
+        skip_flag = os.getenv("CLAUDE_SKIP_PERMISSIONS", "false").lower() == "true"
+        skip_arg = " --dangerously-skip-permissions" if skip_flag else ""
+        shell_cmd = f"cd /d {str(work_path)} && type .lis_prompt.md | claude -p{skip_arg} > .lis_output.txt 2>&1 && echo --- LIS TASK COMPLETE ---"
+        process = await asyncio.create_subprocess_exec(
+            "cmd.exe", "/c", "start", "cmd.exe", "/k", shell_cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -383,7 +382,7 @@ class ClaudeTaskManager:
             await asyncio.sleep(5)
             if output_file.exists():
                 content = output_file.read_text()
-                if "--- LIS TASK COMPLETE ---" in content or len(content) > 100:
+                if "--- LIS TASK COMPLETE ---" in content:
                     task.result = content.replace("--- LIS TASK COMPLETE ---", "").strip()
                     task.status = "completed"
                     break
@@ -404,7 +403,7 @@ class ClaudeTaskManager:
         # Clean up prompt file
         try:
             prompt_file.unlink()
-        except:
+        except Exception:
             pass
 
         # Auto-QA on completed tasks
@@ -614,7 +613,7 @@ async def classify_intent(text: str, client: anthropic.AsyncAnthropic) -> dict:
     try:
         response_text = await generate_text(
             client=client,
-            model="claude-3-5-haiku-20241022",
+            model=models.HAIKU,
             max_tokens=100,
             system=(
                 "Classify this voice command. The user is talking to LIS, an AI assistant that can:\n"
@@ -795,7 +794,8 @@ async def _execute_research(target: str, ws=None):
         log.info(f"Research started via claude -p in {path}")
 
         process = await asyncio.create_subprocess_exec(
-            "claude", "-p", "--output-format", "text", "--dangerously-skip-permissions",
+            "claude", "-p", "--output-format", "text",
+            *([ "--dangerously-skip-permissions"] if os.getenv("CLAUDE_SKIP_PERMISSIONS", "false").lower() == "true" else []),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -950,7 +950,7 @@ async def _execute_prompt_project(project_name: str, prompt: str, work_session: 
             # Summarize via resilient fallback
             summary = await generate_text(
                 client=anthropic_client,
-                model="claude-3-5-haiku-20241022",
+                model=models.HAIKU,
                 max_tokens=60,
                 system="Summarize this build/script run in one spoken sentence.",
                 messages=[{"role": "user", "content": full_response}],
@@ -1007,7 +1007,7 @@ async def self_work_and_notify(session: WorkSession, prompt: str, ws):
             try:
                 summary_text = await generate_text(
                     client=anthropic_client,
-                    model="claude-3-5-haiku-20241022",
+                    model=models.HAIKU,
                     max_tokens=100,
                     system="You are LIS. Summarize what you just completed in 1 sentence. First person - 'I built', 'I set up'. No markdown. Never say 'Claude Code'.",
                     messages=[{"role": "user", "content": f"Claude Code completed:\n{full_response[:2000]}"}],
@@ -1325,42 +1325,7 @@ async def generate_text_openrouter(messages: list[dict], system_prompt: str = ""
 # LLM Response logic
 # ---------------------------------------------------------------------------
 
-async def get_lis_response(text: str, client: anthropic.AsyncAnthropic, history: list[dict], context: str = "") -> str:
-    """Generate a response from LIS using Claude (primary) or free fallback chain."""
-    
-    # Try Claude first (if key exists)
-    if ANTHROPIC_API_KEY and len(ANTHROPIC_API_KEY) > 20 and not API_DEAD.get("anthropic"):
-        try:
-            resp = await client.messages.create(
-                model="claude-3-5-haiku-20241022",
-                max_tokens=200,
-                system=f"{LIS_SYSTEM_PROMPT}\n\nUser Context:\n{context}",
-                messages=history + [{"role": "user", "content": text}],
-            )
-            return resp.content[0].text
-        except Exception as e:
-            if "balance" in str(e).lower() or "400" in str(e):
-                log.warning(f"Claude balance low, falling back. Disabling Anthropic for this session.")
-                API_DEAD["anthropic"] = True
-            else:
-                log.error(f"Claude error: {e}")
-                raise e # Re-raise other errors
-    
-    # Fallback to free chain
-    groq_system = (
-        f"{LIS_SYSTEM_PROMPT}\n\n"
-        "IMPORTANT PERSONALITY INJECTION: You are currently using fallback systems. "
-        "DO NOT use robotic phrases like 'As an AI' or 'I am an assistant'. "
-        "Maintain your deep, affectionate persona (LIS) at all costs. "
-        "User Context:\n{context}"
-    )
-    groq_resp = await generate_text_groq(
-        history + [{"role": "user", "content": text}],
-        system_prompt=groq_system
-    )
-    if groq_resp:
-        return groq_resp
-    
+
 def _build_fallback_chain():
     """Build the ordered list of fallback providers.
 
@@ -1507,7 +1472,7 @@ async def generate_response(
     try:
         return await generate_text(
             client=client,
-            model="claude-3-5-haiku-20241022",
+            model=models.HAIKU,
             max_tokens=tokens,
             system=system,
             messages=messages,
@@ -1522,8 +1487,7 @@ async def generate_response(
 # ---------------------------------------------------------------------------
 
 # Neural & Emotional Global State
-_current_response_id = 0
-_cancel_response = False
+# NOTE: _current_response_id and _cancel_response moved to per-connection scope in voice_handler
 _last_greeting_time = 0.0
 
 # Shared state
@@ -1659,6 +1623,7 @@ def _refresh_context_sync():
                         conn = memory._get_db()
                         conn.execute("UPDATE timers SET is_active = 0 WHERE id = ?", (t["id"],))
                         conn.commit()
+                        conn.close()
                 
                 # Reminders
                 for r in memory.get_pending_reminders():
@@ -1678,6 +1643,7 @@ def _refresh_context_sync():
                         conn = memory._get_db()
                         conn.execute("UPDATE alarms SET is_active = 0 WHERE id = ?", (a["id"],))
                         conn.commit()
+                        conn.close()
             except Exception as e:
                 log.debug(f"Scheduler error: {e}")
 
@@ -1814,13 +1780,45 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(title="LIS Server", version="0.1.0", lifespan=lifespan)
 
+# CORS: restrict to known frontend origins; override via LIS_CORS_ORIGINS env var
+_cors_origins = os.getenv("LIS_CORS_ORIGINS", "")
+if _cors_origins:
+    _allowed_origins = [o.strip() for o in _cors_origins.split(",")]
+else:
+    _allowed_origins = [
+        "http://localhost:5173",
+        "http://localhost:8340",
+        "https://localhost:8340",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:8340",
+        "https://127.0.0.1:8340",
+    ]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ── Auth Middleware ───────────────────────────────────────────────────────
+_LIS_AUTH_TOKEN = os.getenv("LIS_AUTH_TOKEN", "")
+
+@app.middleware("http")
+async def auth_middleware(request, call_next):
+    """Token auth on /api/* routes when LIS_AUTH_TOKEN is set."""
+    if not _LIS_AUTH_TOKEN:
+        return await call_next(request)  # Auth disabled
+    path = request.url.path
+    # Skip auth for health check and static assets
+    if path in ("/api/health", "/") or not path.startswith("/api"):
+        return await call_next(request)
+    auth_header = request.headers.get("authorization", "")
+    if auth_header == f"Bearer {_LIS_AUTH_TOKEN}":
+        return await call_next(request)
+    from fastapi.responses import JSONResponse as _JR
+    return _JR(status_code=401, content={"error": "Unauthorized. Set Authorization: Bearer <LIS_AUTH_TOKEN> header."})
 
 
 # -- REST Endpoints --------------------------------------------------------
@@ -2216,7 +2214,11 @@ def detect_action_fast(text: str) -> dict | None:
         return {"action": "generate_image", "args": {"prompt": img_match.group(1)}}
 
     # ── DICTIONARY ──
-    define_match = re.match(r'^(?:define|meaning of|what does .+ mean|definition of)\s+(.+)$', t)
+    # Handle "what does X mean" separately (the capture group is inside the phrase)
+    wdm_match = re.match(r'^what does (.+?) mean\??$', t)
+    if wdm_match:
+        return {"action": "define_word", "args": {"word": wdm_match.group(1).strip()}}
+    define_match = re.match(r'^(?:define|meaning of|definition of)\s+(.+)$', t)
     if define_match:
         word = define_match.group(1).strip().rstrip("?")
         return {"action": "define_word", "args": {"word": word}}
@@ -2233,15 +2235,16 @@ def detect_action_fast(text: str) -> dict | None:
         lang = lang_codes.get(lang.lower(), lang.lower()[:2])
         return {"action": "translate", "args": {"text": text, "to_lang": lang}}
 
-    # ── UNIT CONVERSION ──
-    unit_match = re.match(r'^convert\s+([\d.]+)\s+(\w+)\s+to\s+(\w+)$', t)
-    if unit_match:
-        return {"action": "convert_unit", "args": {"value": float(unit_match.group(1)), "from_unit": unit_match.group(2), "to_unit": unit_match.group(3)}}
+    # ── UNIT AND CURRENCY CONVERSION ──
+    conv_match = re.match(r'^convert\s+([\d.]+)\s+(\w+)\s+to\s+(\w+)$', t)
+    if conv_match:
+        val, fr, to = conv_match.groups()
+        currency_codes = {"usd", "inr", "eur", "gbp", "jpy", "cad", "aud", "cny", "rupees", "dollars", "euros", "pounds"}
+        if fr.lower() in currency_codes or to.lower() in currency_codes:
+            return {"action": "convert_currency", "args": {"amount": float(val), "from_currency": fr, "to_currency": to}}
+        else:
+            return {"action": "convert_unit", "args": {"value": float(val), "from_unit": fr, "to_unit": to}}
 
-    # ── CURRENCY CONVERSION ──
-    curr_match = re.match(r'^convert\s+([\d.]+)\s+(\w+)\s+to\s+(\w+)$', t)
-    if not unit_match and curr_match:
-        return {"action": "convert_currency", "args": {"amount": float(curr_match.group(1)), "from_currency": curr_match.group(2), "to_currency": curr_match.group(3)}}
     # Simple pattern: "100 usd in inr"
     curr_match2 = re.match(r'^([\d.]+)\s+(\w+)\s+(?:in|to)\s+(\w+)$', t)
     if curr_match2:
@@ -2301,7 +2304,8 @@ def detect_action_fast(text: str) -> dict | None:
 # -- Action Handlers -------------------------------------------------------
 
 async def handle_open_terminal() -> str:
-    result = await open_terminal("claude --dangerously-skip-permissions")
+    _skip = "claude --dangerously-skip-permissions" if os.getenv("CLAUDE_SKIP_PERMISSIONS", "false").lower() == "true" else "claude"
+    result = await open_terminal(_skip)
     return result["confirmation"]
 
 
@@ -2319,9 +2323,11 @@ async def handle_build(target: str) -> str:
     prompt_file.write_text(target)
 
     # Launch in Windows cmd
-    cmd = f'start cmd.exe /k "cd /d {path} && type .lis_prompt.txt | claude -p --dangerously-skip-permissions"'
-    await asyncio.create_subprocess_shell(
-        cmd,
+    _skip_flag = os.getenv("CLAUDE_SKIP_PERMISSIONS", "false").lower() == "true"
+    _skip_arg = " --dangerously-skip-permissions" if _skip_flag else ""
+    _build_cmd = f"cd /d {Path(path).resolve()} && type .lis_prompt.txt | claude -p{_skip_arg}"
+    await asyncio.create_subprocess_exec(
+        "cmd.exe", "/c", "start", "cmd.exe", "/k", _build_cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -2350,8 +2356,8 @@ async def handle_show_recent() -> str:
         return f"Opened {html_files[0].name} from {last['name']}, sir."
 
     # Fall back to opening the folder in Explorer (Windows)
-    await asyncio.create_subprocess_shell(
-        f'start explorer "{last["path"]}"',
+    await asyncio.create_subprocess_exec(
+        "cmd.exe", "/c", "start", "explorer", str(Path(last["path"]).resolve()),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -2556,7 +2562,7 @@ async def handle_research(text: str, target: str, client: anthropic.AsyncAnthrop
     try:
         research_text = await generate_text(
             client=client,
-            model="claude-3-5-sonnet-20241022", # Sonnet is better for research
+            model=models.SONNET,  # Sonnet is better for research
             max_tokens=2000,
             system=f"You are LIS, researching a topic for {USER_NAME}. Be thorough, organized, and cite sources where possible.",
             messages=[{"role": "user", "content": f"Research this thoroughly:\n\n{target}"}],
@@ -2589,7 +2595,7 @@ blockquote { border-left: 3px solid #0ea5e9; margin-left: 0; padding-left: 16px;
         # Short voice summary via Haiku
         summary_text = await generate_text(
             client=client,
-            model="claude-3-5-haiku-20241022",
+            model=models.HAIKU,
             max_tokens=80,
             system="Summarize this research in ONE sentence for voice. No markdown.",
             messages=[{"role": "user", "content": research_text[:2000]}],
@@ -2626,7 +2632,7 @@ Write an updated summary in 2-4 sentences capturing the key topics, decisions, a
             
         summary_text = await generate_text(
             client=client,
-            model="claude-3-5-haiku-20241022",
+            model=models.HAIKU,
             max_tokens=200,
             system="You are summarizing the conversation history concisely.",
             messages=[{"role": "user", "content": prompt}],
@@ -2637,7 +2643,7 @@ Write an updated summary in 2-4 sentences capturing the key topics, decisions, a
         return old_summary  # Keep old summary on failure
 
 
-async def handle_skill_execution(name: str, args: dict) -> dict:
+async def handle_skill_execution(name: str, args: dict, confirmed: bool = False) -> dict:
     """Bridge for server.py to execute skills from skills.registry or legacy actions.py."""
     skill = skills.registry.get(name)
     if not skill:
@@ -2648,8 +2654,8 @@ async def handle_skill_execution(name: str, args: dict) -> dict:
             legacy_target = args.get("target") or args.get("query") or ""
             
         from actions import execute_action
-        result = await execute_action({"action": name, "target": legacy_target})
-        if result and "confirmation" in result:
+        result = await execute_action({"action": name, "target": legacy_target}, confirmed=confirmed)
+        if result and (result.get("confirmation") or result.get("needs_confirmation")):
             return result
             
         log.warning(f"Skill not found in registry and actions fallback failed: {name}")
@@ -2726,15 +2732,22 @@ async def voice_handler(ws: WebSocket):
         {"type": "task_spawned", "task_id": "...", "prompt": "..."}
         {"type": "task_complete", "task_id": "...", "summary": "..."}
     """
+    # WebSocket auth: check token query param when LIS_AUTH_TOKEN is set
+    if _LIS_AUTH_TOKEN:
+        token = ws.query_params.get("token", "")
+        if token != _LIS_AUTH_TOKEN:
+            await ws.close(code=1008, reason="Unauthorized")
+            return
     await ws.accept()
     task_manager.register_websocket(ws)
     history: list[dict] = []
     work_session = WorkSession()
     planner = TaskPlanner()
 
-    global _current_response_id, _cancel_response, _last_greeting_time
-    _current_response_id = 0
-    _cancel_response = False
+    # Per-connection response state (not global, to avoid cross-connection cancellation)
+    _conn_response_id = 0
+    _conn_cancel_response = False
+    pending_action = None  # Track high-stakes action awaiting confirmation
 
     # Audio collision prevention - track when user last spoke
     voice_state = {"last_user_time": 0.0}
@@ -2814,9 +2827,15 @@ async def voice_handler(ws: WebSocket):
 
         # ── Proactive Voice Listener ──
         async def _check_voice_queue():
+            """Drain the thread-safe queue.Queue from the async side."""
             try:
                 while True:
-                    text = await task_manager._voice_queue.get()
+                    # Poll the thread-safe queue; yield control between checks
+                    try:
+                        text = task_manager._voice_queue.get_nowait()
+                    except queue.Empty:
+                        await asyncio.sleep(0.5)
+                        continue
                     if text:
                         audio_bytes = await synthesize_speech(text)
                         if audio_bytes and len(audio_bytes) > 512:
@@ -2825,7 +2844,6 @@ async def voice_handler(ws: WebSocket):
                             await ws.send_json({"type": "status", "state": "speaking"})
                             await ws.send_json({"type": "audio", "data": encoded, "text": text})
                             await ws.send_json({"type": "status", "state": "idle"})
-                    task_manager._voice_queue.task_done()
             except Exception as e:
                 log.debug(f"Voice queue listener error: {e}")
 
@@ -2855,8 +2873,8 @@ async def voice_handler(ws: WebSocket):
 
             if msg.get("type") == "abort_audio":
                 log.info("Barge-in detected: Aborting audio")
-                _current_response_id += 1
-                _cancel_response = True
+                _conn_response_id += 1
+                _conn_cancel_response = True
                 continue
 
             if msg.get("type") != "transcript" or not msg.get("isFinal"):
@@ -2867,14 +2885,41 @@ async def voice_handler(ws: WebSocket):
                 continue
 
             # Cancel any in-flight response
-            _current_response_id += 1
-            my_response_id = _current_response_id
-            _cancel_response = True
+            _conn_response_id += 1
+            my_response_id = _conn_response_id
+            _conn_cancel_response = True
             await asyncio.sleep(0.05)  
-            _cancel_response = False
+            _conn_cancel_response = False
 
             voice_state["last_user_time"] = time.time()
             log.info(f"User: {user_text}")
+
+            # Two-turn confirmation check
+            if pending_action:
+                is_confirm = re.search(r'\b(yes|confirm|confirmed|proceed|do it|haan|okay|ok|sure|agree)\b', user_text.lower())
+                action_name = pending_action["action"]
+                action_args = pending_action.get("args", {})
+                pending_action = None  # Clear it immediately
+
+                if is_confirm:
+                    log.info(f"User confirmed pending action: {action_name}({action_args})")
+                    result = await handle_skill_execution(action_name, action_args, confirmed=True)
+                    response_text = result.get("confirmation") or "Done, sir."
+
+                    await ws.send_json({"type": "status", "state": "speaking"})
+                    audio = await synthesize_speech(response_text)
+                    if audio:
+                        await ws.send_json({"type": "audio", "data": base64.b64encode(audio).decode(), "text": response_text})
+                    else:
+                        await ws.send_json({"type": "text", "text": response_text})
+                    await ws.send_json({"type": "status", "state": "idle"})
+
+                    history.append({"role": "user", "content": user_text})
+                    history.append({"role": "assistant", "content": response_text})
+                    last_lis_response = response_text
+                    continue
+                else:
+                    log.info("User did not confirm pending action. Proceeding with standard flow.")
 
             # Lazy project scan on first message
             global cached_projects
@@ -3109,6 +3154,20 @@ async def voice_handler(ws: WebSocket):
                     if action_name in ["screen", "describe_screen"]:
                         asyncio.create_task(_lookup_and_report("screen", _do_screen_lookup, ws, history=history, voice_state=voice_state))
                         if not response_text: response_text = "Dekhti hoon abhi."
+                    elif action_name == "check_calendar":
+                        asyncio.create_task(_lookup_and_report("calendar", _do_calendar_lookup, ws, history=history, voice_state=voice_state))
+                        if not response_text: response_text = "Checking your calendar, sir."
+                    elif action_name == "check_mail":
+                        asyncio.create_task(_lookup_and_report("mail", _do_mail_lookup, ws, history=history, voice_state=voice_state))
+                        if not response_text: response_text = "Checking your mail, sir."
+                    elif action_name == "check_dispatch":
+                        dispatch_summary = dispatch_registry.format_for_prompt()
+                        response_text = dispatch_summary if dispatch_summary.strip() else "No active projects right now, sir."
+                    elif action_name == "check_tasks":
+                        open_tasks = memory.get_open_tasks()
+                        response_text = format_tasks_for_voice(open_tasks) if open_tasks else "All clear, sir. No open tasks."
+                    elif action_name == "check_usage":
+                        response_text = get_usage_summary()
                     elif action_name == "research":
                         name = _generate_project_name(action_args)
                         path = str(Path.home() / "Desktop" / name)
@@ -3117,9 +3176,12 @@ async def voice_handler(ws: WebSocket):
                         asyncio.create_task(self_work_and_notify(work_session, action_args, ws))
                         if not response_text: response_text = "Abhi dekhti hoon."
                     else:
-                        result = await handle_skill_execution(action_name, action_args)
+                        result = await handle_skill_execution(action_name, action_args, confirmed=False)
+                        if result and result.get("needs_confirmation"):
+                            pending_action = {"action": action_name, "args": action_args}
+                            response_text = result["confirmation"]
                         # KEY FIX: Only use skill result if LLM didn't already provide text
-                        if result and result.get("success") and result.get("confirmation"):
+                        elif result and result.get("success") and result.get("confirmation"):
                             if not response_text:
                                 response_text = result["confirmation"]
                             else:
@@ -3189,7 +3251,7 @@ async def voice_handler(ws: WebSocket):
                         summary_update_pending = True
                         
                         async def _compress_memory():
-                            nonlocal session_summary, summary_update_pending, messages_since_last_summary, history
+                            nonlocal session_summary, summary_update_pending, messages_since_last_summary
                             try:
                                 # Send the oldest 14 messages (7 turns) to be summarized
                                 to_summarize = history[:-6]
@@ -3197,8 +3259,10 @@ async def voice_handler(ws: WebSocket):
                                     new_summary = await _update_session_summary(session_summary, to_summarize, active_client)
                                     if new_summary != session_summary:
                                         session_summary = new_summary
-                                        # Keep only the last 6 messages (3 turns)
-                                        history = history[-6:]
+                                        # Mutate in-place so background tasks holding
+                                        # a reference to this list see the truncation
+                                        del history[:-6]
+
                                         messages_since_last_summary = 6
                                         log.info(f"Memory compressed. New summary: {session_summary[:60]}...")
                             except Exception as e:
@@ -3290,6 +3354,8 @@ class PreferencesUpdate(BaseModel):
     user_name: str = ""
     honorific: str = "sir"
     calendar_accounts: str = "auto"
+    enable_autonomous_learning: bool = False
+    lis_browser_headless: bool = True
 
 @app.post("/api/settings/keys")
 async def api_settings_keys(body: KeyUpdate):
@@ -3306,7 +3372,7 @@ async def api_test_anthropic(body: KeyTest):
         return {"valid": False, "error": "No key provided"}
     try:
         client = anthropic.AsyncAnthropic(api_key=key)
-        await client.messages.create(model="claude-haiku-4-5-20251001", max_tokens=10, messages=[{"role": "user", "content": "Hi"}])
+        await client.messages.create(model=models.HAIKU, max_tokens=10, messages=[{"role": "user", "content": "Hi"}])
         return {"valid": True}
     except Exception as e:
         return {"valid": False, "error": str(e)[:200]}
@@ -3373,6 +3439,8 @@ async def api_get_preferences():
         "user_name": env_dict.get("USER_NAME", ""),
         "honorific": env_dict.get("HONORIFIC", "sir"),
         "calendar_accounts": env_dict.get("CALENDAR_ACCOUNTS", "auto"),
+        "enable_autonomous_learning": env_dict.get("ENABLE_AUTONOMOUS_LEARNING", "False").lower() in ("true", "1", "yes"),
+        "lis_browser_headless": env_dict.get("LIS_BROWSER_HEADLESS", "True").lower() in ("true", "1", "yes"),
     }
 
 @app.post("/api/settings/preferences")
@@ -3380,7 +3448,34 @@ async def api_save_preferences(body: PreferencesUpdate):
     _write_env_key("USER_NAME", body.user_name)
     _write_env_key("HONORIFIC", body.honorific)
     _write_env_key("CALENDAR_ACCOUNTS", body.calendar_accounts)
+    _write_env_key("ENABLE_AUTONOMOUS_LEARNING", str(body.enable_autonomous_learning).lower())
+    _write_env_key("LIS_BROWSER_HEADLESS", str(body.lis_browser_headless).lower())
     return {"success": True}
+
+# -- Learner API --
+@app.get("/api/learner/status")
+async def api_learner_status():
+    import autonomous_learner
+    is_running = autonomous_learner.get_learning_status()
+    store = autonomous_learner.LearnerVectorStore()
+    recent = store.get_recent_topics(limit=10) if store.is_ready() else []
+    return {"is_running": is_running, "recent_topics": recent}
+
+@app.post("/api/learner/stop")
+async def api_learner_stop():
+    import autonomous_learner
+    stopped = autonomous_learner.stop_learning_cycle()
+    return {"success": stopped}
+
+class DeleteMemoryReq(BaseModel):
+    url: str
+
+@app.delete("/api/learner/memory")
+async def api_learner_delete_memory(body: DeleteMemoryReq):
+    import autonomous_learner
+    store = autonomous_learner.LearnerVectorStore()
+    success = store.delete_by_url(body.url)
+    return {"success": success}
 
 # ---------------------------------------------------------------------------
 # Control endpoints (restart, fix-self)
@@ -3392,7 +3487,7 @@ async def api_restart():
     log.info("Restart requested - shutting down in 2 seconds")
     async def _restart():
         await asyncio.sleep(2)
-        cmd = [sys.executable, __file__, "--port", "8340", "--host", "0.0.0.0"]
+        cmd = [sys.executable, __file__, "--port", "8340", "--host", "127.0.0.1"]
         os.execv(sys.executable, cmd)
     asyncio.create_task(_restart())
     return {"status": "restarting"}
@@ -3401,12 +3496,14 @@ async def api_restart():
 @app.post("/api/fix-self")
 async def api_fix_self():
     """Enter work mode in the LIS repo - LIS can now fix himself."""
-    lis_dir = str(Path(__file__).parent)
+    lis_dir = str(Path(__file__).parent.resolve())
     try:
         # Launch claude interactive on Windows
-        cmd = f'start cmd.exe /k "cd /d {lis_dir} && claude --dangerously-skip-permissions"'
-        proc = await asyncio.create_subprocess_shell(
-            cmd,
+        _skip_flag = os.getenv("CLAUDE_SKIP_PERMISSIONS", "false").lower() == "true"
+        _skip_arg = " --dangerously-skip-permissions" if _skip_flag else ""
+        _fix_cmd = f"cd /d {lis_dir} && claude{_skip_arg}"
+        proc = await asyncio.create_subprocess_exec(
+            "cmd.exe", "/c", "start", "cmd.exe", "/k", _fix_cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -3450,11 +3547,27 @@ if __name__ == "__main__":
     import socket
 
     parser = argparse.ArgumentParser(description="LIS Server")
-    parser.add_argument("--host", default="0.0.0.0", help="Bind host")
+    parser.add_argument("--host", default="127.0.0.1", help="Bind host (use 0.0.0.0 for LAN access)")
     parser.add_argument("--port", type=int, default=8340, help="Bind port")
     parser.add_argument("--reload", action="store_true", help="Auto-reload on changes")
     parser.add_argument("--ssl", action="store_true", help="Enable HTTPS with key.pem/cert.pem")
     args = parser.parse_args()
+
+    # ── Security gate: warn if binding to network without auth ──
+    _is_local = args.host in ("127.0.0.1", "localhost", "::1")
+    if not _is_local and not os.getenv("LIS_AUTH_TOKEN"):
+        print()
+        print("  ⚠️  WARNING: You are binding to a non-localhost address without LIS_AUTH_TOKEN set.")
+        print("  ⚠️  All /api/* endpoints and WebSocket will be accessible without authentication.")
+        print("  ⚠️  Set LIS_AUTH_TOKEN in .env or pass --host 127.0.0.1 for local-only access.")
+        print()
+        try:
+            answer = input("  Continue without auth? [y/N] ").strip().lower()
+            if answer != "y":
+                print("  Aborted. Set LIS_AUTH_TOKEN in .env and try again.")
+                sys.exit(1)
+        except (KeyboardInterrupt, EOFError):
+            sys.exit(1)
 
     # ── AUTO PORT KILL ── Never get WinError 10048 again
     def _kill_port(port: int):

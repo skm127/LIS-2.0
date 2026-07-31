@@ -11,6 +11,7 @@ import time
 import re
 from dataclasses import dataclass
 from typing import Optional
+import models
 
 log = logging.getLogger("lis.empathy")
 
@@ -149,7 +150,7 @@ class EmpathyEngine:
         # Try Anthropic first
         try:
             response = await self.client.messages.create(
-                model="claude-haiku-4-5-20251001",
+                model=models.HAIKU,
                 max_tokens=150,
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_text}]

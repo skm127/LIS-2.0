@@ -150,7 +150,8 @@ class DispatchRegistry:
                 lines.append(f"  - [{d['status']}] {d['project_name']} ({elapsed}s ago): {d['original_prompt'][:80]}")
             parts.append("CURRENTLY WORKING ON:\n" + "\n".join(lines))
 
-        completed = [d for d in recent if d["status"] == "completed" and d not in active]
+        active_ids = {d["id"] for d in active}
+        completed = [d for d in recent if d["status"] == "completed" and d["id"] not in active_ids]
         if completed:
             lines = []
             for d in completed[:2]:

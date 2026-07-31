@@ -7,6 +7,7 @@ Spawns a claude -p subprocess to check completed work, auto-retries on failure.
 import asyncio
 import json
 import logging
+import os
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from typing import Optional
@@ -45,10 +46,13 @@ class QAAgent:
         )
 
         try:
+            skip_flag = os.getenv("CLAUDE_SKIP_PERMISSIONS", "false").lower() == "true"
+            cmd_args = ["claude", "-p", "--output-format", "text"]
+            if skip_flag:
+                cmd_args.append("--dangerously-skip-permissions")
+
             process = await asyncio.create_subprocess_exec(
-                "claude", "-p",
-                "--output-format", "text",
-                "--dangerously-skip-permissions",
+                *cmd_args,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -133,10 +137,13 @@ class QAAgent:
         )
 
         try:
+            skip_flag = os.getenv("CLAUDE_SKIP_PERMISSIONS", "false").lower() == "true"
+            cmd_args = ["claude", "-p", "--output-format", "text"]
+            if skip_flag:
+                cmd_args.append("--dangerously-skip-permissions")
+
             process = await asyncio.create_subprocess_exec(
-                "claude", "-p",
-                "--output-format", "text",
-                "--dangerously-skip-permissions",
+                *cmd_args,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,

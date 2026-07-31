@@ -12,7 +12,7 @@ from typing import Optional
 
 log = logging.getLogger("LIS.tracking")
 
-DB_PATH = Path(__file__).parent / "lis_data.db"
+DB_PATH = Path(__file__).parent / "data" / "lis.db"
 
 
 class SuccessTracker:
@@ -20,6 +20,7 @@ class SuccessTracker:
 
     def __init__(self, db_path: str = None):
         self.db_path = db_path or str(DB_PATH)
+        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(self.db_path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self._create_tables()

@@ -1,5 +1,5 @@
 """
-LIS Browser — Playwright-based web browsing capabilities.
+LIS Browser — browser-use based web capabilities.
 
 Provides search, page visits, screenshots, and multi-step research.
 Runs headless Chromium with realistic user agent to avoid blocking.
@@ -8,16 +8,24 @@ Runs headless Chromium with realistic user agent to avoid blocking.
 import asyncio
 import logging
 import tempfile
+import os
 from dataclasses import dataclass, field, asdict
-from pathlib import Path
 from typing import Optional
+
+try:
+    from browser_use import Browser, BrowserConfig, Agent
+except ImportError:
+    Browser = None
+    BrowserConfig = None
+    Agent = None
+
+try:
+    from langchain_openai import ChatOpenAI
+except ImportError:
+    ChatOpenAI = None
 
 log = logging.getLogger("lis.browser")
 
-USER_AGENT = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-)
 TIMEOUT_MS = 30_000
 
 
@@ -62,39 +70,62 @@ class ResearchResult:
 # ---------------------------------------------------------------------------
 
 class LisBrowser:
-    """Playwright-based web browsing for LIS."""
+    """Browser-use backed web browsing for LIS."""
 
     def __init__(self):
-        self._pw = None
         self._browser = None
         self._context = None
+        self._pw_browser = None
 
     async def _ensure_browser(self):
         """Launch browser if not running."""
         if self._browser and self._context:
             return
 
-        from playwright.async_api import async_playwright
+        if not Browser:
+            raise ImportError("browser-use is not installed.")
 
-        self._pw = await async_playwright().start()
-        # Launch VISIBLE browser so user can watch LIS browse
-        self._browser = await self._pw.chromium.launch(headless=False)
-        self._context = await self._browser.new_context(
-            user_agent=USER_AGENT,
-            viewport={"width": 1280, "height": 900},
-        )
-        log.info("Browser launched (visible Chromium)")
+        # Initialize browser-use Browser with visible UI
+        self._browser = Browser(config=BrowserConfig(headless=False))
+        self._context = await self._browser.new_context()
+        log.info("Browser-use launched (visible)")
 
-    async def _new_page(self):
-        """Create a new page in the browser context."""
+    async def _get_pw_page(self):
+        """Get a raw Playwright page for deterministic tasks."""
         await self._ensure_browser()
-        return await self._context.new_page()
+        # BrowserContext in browser-use wraps Playwright context.
+        # We can create a new page on its underlying Playwright context.
+        pw_context = self._context.context
+        return await pw_context.new_page()
+
+    def _get_llm(self):
+        """Get an LLM instance for the browser-use Agent."""
+        if not ChatOpenAI:
+            raise ImportError("langchain-openai is not installed.")
+            
+        nvidia_key = os.getenv("NVIDIA_API_KEY")
+        if nvidia_key:
+            return ChatOpenAI(
+                api_key=nvidia_key,
+                base_url="https://integrate.api.nvidia.com/v1",
+                model="meta/llama-3.1-70b-instruct"
+            )
+            
+        groq_key = os.getenv("GROQ_API_KEY")
+        if groq_key:
+            return ChatOpenAI(
+                api_key=groq_key,
+                base_url="https://api.groq.com/openai/v1",
+                model="llama-3.3-70b-versatile"
+            )
+            
+        raise ValueError("No NVIDIA_API_KEY or GROQ_API_KEY found to power the browser Agent.")
 
     # -- Search ----------------------------------------------------------------
 
     async def search(self, query: str) -> list[SearchResult]:
         """Search DuckDuckGo and return top results."""
-        page = await self._new_page()
+        page = await self._get_pw_page()
         results = []
 
         try:
@@ -125,13 +156,11 @@ class LisBrowser:
                     ))
 
             log.info(f"Search '{query}' returned {len(results)} results")
-            # Let user see the search results for a moment
             await asyncio.sleep(2)
         except Exception as e:
             log.warning(f"Search failed for '{query}': {e}")
         finally:
-            # Don't close the page — keep it visible
-            pass
+            await page.close()
 
         return results
 
@@ -139,7 +168,7 @@ class LisBrowser:
 
     async def visit(self, url: str) -> PageContent:
         """Visit a URL and extract main text content."""
-        page = await self._new_page()
+        page = await self._get_pw_page()
 
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=TIMEOUT_MS)
@@ -148,13 +177,11 @@ class LisBrowser:
                 () => {
                     const title = document.title || '';
 
-                    // Try to get main content area first
                     const main = document.querySelector('main')
                         || document.querySelector('article')
                         || document.querySelector('[role="main"]')
                         || document.body;
 
-                    // Remove noise elements
                     const clone = main.cloneNode(true);
                     for (const el of clone.querySelectorAll(
                         'script, style, nav, header, footer, aside, .sidebar, .menu, .ad, .advertisement, iframe'
@@ -163,7 +190,6 @@ class LisBrowser:
                     }
 
                     const text = clone.innerText || clone.textContent || '';
-                    // Trim to reasonable size
                     const trimmed = text.substring(0, 5000).trim();
                     return {
                         title: title,
@@ -172,6 +198,8 @@ class LisBrowser:
                 }
             """)
 
+            await asyncio.sleep(3)
+
             text = data.get("text", "")
             return PageContent(
                 title=data.get("title", ""),
@@ -179,9 +207,6 @@ class LisBrowser:
                 text_content=text,
                 word_count=len(text.split()),
             )
-
-            # Let user see the page for a moment
-            await asyncio.sleep(3)
         except Exception as e:
             log.warning(f"Visit failed for '{url}': {e}")
             return PageContent(
@@ -190,17 +215,18 @@ class LisBrowser:
                 text_content=f"Failed to load page: {e}",
                 word_count=0,
             )
-        # Don't close — keep pages visible
+        finally:
+            await page.close()
 
     # -- Screenshot ------------------------------------------------------------
 
     async def screenshot(self, url: str, path: str = None) -> str:
         """Take screenshot of a page. Returns file path to PNG."""
-        page = await self._new_page()
+        page = await self._get_pw_page()
 
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=TIMEOUT_MS)
-            await page.wait_for_timeout(1000)  # let rendering settle
+            await page.wait_for_timeout(1000)
 
             if not path:
                 tmp = tempfile.mktemp(suffix=".png", prefix="lis_screenshot_")
@@ -219,29 +245,38 @@ class LisBrowser:
     # -- Research (multi-step) -------------------------------------------------
 
     async def research(self, topic: str) -> ResearchResult:
-        """Multi-step research: search -> visit top results -> compile findings."""
-        results = await self.search(topic)
-        sources = []
-        contents = []
-
-        for r in results[:3]:
-            try:
-                page_content = await self.visit(r.url)
-                sources.append(r.url)
-                contents.append(
-                    f"## {r.title}\nURL: {r.url}\n\n{page_content.text_content[:1500]}"
-                )
-            except Exception:
-                continue
-
-        summary = "\n\n---\n\n".join(contents) if contents else "No results found."
-
-        return ResearchResult(
-            topic=topic,
-            sources=sources,
-            summary=summary,
-            key_findings=[r.title for r in results[:3]],
+        """Multi-step research powered entirely by browser-use Agent."""
+        await self._ensure_browser()
+        llm = self._get_llm()
+        
+        task = f"Research the following topic: {topic}. Search the web, read at least 2 relevant articles, and write a summary of your key findings."
+        
+        log.info(f"Starting browser-use Agent for topic: {topic}")
+        agent = Agent(
+            task=task,
+            llm=llm,
+            browser=self._browser
         )
+        
+        try:
+            history = await agent.run()
+            # The agent run returns an AgentHistoryList. We can get the final result text.
+            final_result = history.final_result() if hasattr(history, "final_result") else str(history)
+            
+            return ResearchResult(
+                topic=topic,
+                sources=["Agent-driven exploration"],
+                summary=final_result or "The agent completed the task but returned no summary.",
+                key_findings=["(See summary for findings)"]
+            )
+        except Exception as e:
+            log.error(f"Browser Agent failed on research: {e}")
+            return ResearchResult(
+                topic=topic,
+                sources=[],
+                summary=f"Research failed: {e}",
+                key_findings=[]
+            )
 
     # -- Lifecycle -------------------------------------------------------------
 
@@ -252,12 +287,9 @@ class LisBrowser:
                 await self._context.close()
             if self._browser:
                 await self._browser.close()
-            if self._pw:
-                await self._pw.stop()
             log.info("Browser closed")
         except Exception as e:
             log.warning(f"Browser close error: {e}")
         finally:
-            self._pw = None
             self._browser = None
             self._context = None

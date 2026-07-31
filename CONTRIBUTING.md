@@ -15,19 +15,19 @@ Thanks for your interest in contributing! Here's how to get involved.
 
 - **Bug fixes** — if something's broken, fix it
 - **New integrations** — Spotify, Slack, Notion, etc.
-- **Windows/Linux support** — the AppleScript integrations are macOS-only, cross-platform alternatives welcome
+- **Windows/Linux support** — system integration improvements for Windows (COM automation, PowerShell, etc.) welcome
 - **Better error handling** — things fail silently in places
 - **Voice improvements** — alternative TTS providers, better speech recognition
 - **New actions** — extend what LIS can do
 
 ## Code Style
 
-Yes, `server.py` is a 2400-line monolith. It works. If you want to refactor parts into modules, that's welcome — just make sure nothing breaks.
+Yes, `server.py` is a 3500-line monolith. It works. If you want to refactor parts into modules, that's welcome — just make sure nothing breaks.
 
 - Keep voice responses short (1-2 sentences max)
 - Don't add dependencies unless necessary
 - Test your changes by actually talking to LIS
-- Keep the personality consistent — British butler, dry wit, economy of language
+- Keep the personality consistent — sharp, professional assistant, natural Hinglish
 
 ## What NOT to Do
 

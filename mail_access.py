@@ -1,361 +1,137 @@
 """
-LIS Mail Access — READ-ONLY access to Apple Mail.
+LIS Mail Access — Microsoft Graph API integration.
 
-Any accounts synced to Mail.app (Gmail, iCloud, Exchange, etc.)
-are automatically available. No OAuth needed.
-
-IMPORTANT: This module is intentionally READ-ONLY.
-No send, delete, move, or modify functions exist by design.
+On Windows, AppleScript (osascript) is not available. This module uses the
+Microsoft Graph API to read Outlook Mail. If credentials are not
+configured, it returns a clear "not configured" state.
 """
 
 import asyncio
 import logging
+import os
 from datetime import datetime
 
 log = logging.getLogger("lis.mail")
 
-_mail_launched = False
+MS_GRAPH_CLIENT_ID = os.getenv("MS_GRAPH_CLIENT_ID", "")
+MS_GRAPH_TENANT_ID = os.getenv("MS_GRAPH_TENANT_ID", "common")
 
+from ms_graph_auth import make_graph_request
 
-async def _ensure_mail_running():
-    """Launch Mail.app if not already running."""
-    global _mail_launched
-    if _mail_launched:
-        return
-
-    check = 'tell application "System Events" to return (name of every application process) contains "Mail"'
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "osascript", "-e", check,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+def _check_configured():
+    if not MS_GRAPH_CLIENT_ID:
+        raise RuntimeError(
+            "Microsoft Graph API is not configured. "
+            "Please register an app in Azure AD and set MS_GRAPH_CLIENT_ID in .env "
+            "to enable Mail access on Windows."
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=3)
-        if "true" in stdout.decode().lower():
-            _mail_launched = True
-            return
-    except Exception:
-        pass
-
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "open", "-a", "Mail", "-g",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        await asyncio.wait_for(proc.communicate(), timeout=5)
-        await asyncio.sleep(2)
-        _mail_launched = True
-        log.info("Mail.app launched")
-    except Exception as e:
-        log.warning(f"Failed to launch Mail: {e}")
-
-
-async def _run_mail_script(script: str, timeout: float = 20) -> str:
-    """Run an AppleScript against Mail.app and return output."""
-    import sys
-    if sys.platform == "win32":
-        return ""
-
-    await _ensure_mail_running()
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "osascript", "-e", script,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-
-        if proc.returncode != 0:
-            err = stderr.decode().strip()[:200]
-            log.warning(f"Mail script failed: {err}")
-            return ""
-
-        return stdout.decode().strip()
-    except asyncio.TimeoutError:
-        log.warning("Mail script timed out")
-        return ""
-    except Exception as e:
-        log.warning(f"Mail script error: {e}")
-        return ""
-
 
 async def get_accounts() -> list[str]:
     """Get list of configured mail account names."""
-    script = """
-tell application "Mail"
-    return name of every account
-end tell
-"""
-    raw = await _run_mail_script(script)
-    if not raw:
-        return []
-    return [a.strip() for a in raw.split(",") if a.strip()]
-
+    _check_configured()
+    # MS Graph typically operates on the main account, returning a placeholder
+    return ["Outlook"]
 
 async def get_unread_count() -> dict:
-    """Get unread message count per account and total.
-
-    Returns: {"total": int, "accounts": {"Google": 5, "Work": 3, ...}}
-    """
-    script = """
-tell application "Mail"
-    set totalUnread to unread count of inbox
-    set output to "total:" & totalUnread & linefeed
-    repeat with acct in every account
-        set acctName to name of acct
-        try
-            set acctUnread to unread count of mailbox "INBOX" of acct
-            set output to output & acctName & ":" & acctUnread & linefeed
-        end try
-    end repeat
-    return output
-end tell
-"""
-    raw = await _run_mail_script(script)
-    result = {"total": 0, "accounts": {}}
-    for line in raw.split("\n"):
-        line = line.strip()
-        if ":" in line:
-            key, _, val = line.partition(":")
-            try:
-                count = int(val.strip())
-                if key.strip() == "total":
-                    result["total"] = count
-                else:
-                    result["accounts"][key.strip()] = count
-            except ValueError:
-                pass
-    return result
-
+    """Get unread message count per account and total."""
+    _check_configured()
+    data = await make_graph_request("GET", "/me/mailFolders/inbox")
+    if not data:
+        return {"total": 0, "accounts": {}}
+    
+    count = data.get("unreadItemCount", 0)
+    return {"total": count, "accounts": {"Outlook": count}}
 
 async def get_recent_messages(count: int = 10) -> list[dict]:
-    """Get most recent messages from unified inbox.
-
-    Returns list of {"sender", "subject", "date", "read", "account", "preview"}.
-    """
-    script = f"""
-tell application "Mail"
-    set allMsgs to messages of inbox
-    set msgCount to count of allMsgs
-    set limit to msgCount
-    if limit > {count} then set limit to {count}
-    set output to ""
-    repeat with i from 1 to limit
-        set m to item i of allMsgs
-        set s to sender of m
-        set subj to subject of m
-        set d to date received of m as string
-        set r to read status of m
-        -- Get a short preview (first 150 chars of content)
-        set prev to ""
-        try
-            set rawContent to content of m
-            if length of rawContent > 150 then
-                set prev to text 1 thru 150 of rawContent
-            else
-                set prev to rawContent
-            end if
-        end try
-        -- Replace any ||| in content to avoid breaking our delimiter
-        set output to output & s & "|||" & subj & "|||" & d & "|||" & r & "|||" & prev & linefeed
-    end repeat
-    return output
-end tell
-"""
-    raw = await _run_mail_script(script, timeout=20)
-    if not raw:
+    """Get most recent messages from unified inbox."""
+    _check_configured()
+    params = {
+        "$top": count,
+        "$select": "subject,sender,isRead,receivedDateTime",
+        "$orderby": "receivedDateTime desc"
+    }
+    data = await make_graph_request("GET", "/me/messages", params=params)
+    if not data or "value" not in data:
         return []
-
-    messages = []
-    for line in raw.split("\n"):
-        parts = line.strip().split("|||")
-        if len(parts) >= 4:
-            messages.append({
-                "sender": parts[0].strip(),
-                "subject": parts[1].strip(),
-                "date": parts[2].strip(),
-                "read": parts[3].strip().lower() == "true",
-                "preview": parts[4].strip() if len(parts) > 4 else "",
-            })
-    return messages
-
+        
+    return _parse_graph_messages(data["value"])
 
 async def get_unread_messages(count: int = 10) -> list[dict]:
     """Get unread messages from unified inbox."""
-    script = f"""
-tell application "Mail"
-    set allMsgs to messages of inbox whose read status is false
-    set msgCount to count of allMsgs
-    set limit to msgCount
-    if limit > {count} then set limit to {count}
-    set output to ""
-    repeat with i from 1 to limit
-        set m to item i of allMsgs
-        set s to sender of m
-        set subj to subject of m
-        set d to date received of m as string
-        set prev to ""
-        try
-            set rawContent to content of m
-            if length of rawContent > 150 then
-                set prev to text 1 thru 150 of rawContent
-            else
-                set prev to rawContent
-            end if
-        end try
-        set output to output & s & "|||" & subj & "|||" & d & "|||" & prev & linefeed
-    end repeat
-    return output
-end tell
-"""
-    raw = await _run_mail_script(script, timeout=20)
-    if not raw:
+    _check_configured()
+    params = {
+        "$top": count,
+        "$filter": "isRead eq false",
+        "$select": "subject,sender,isRead,receivedDateTime",
+        "$orderby": "receivedDateTime desc"
+    }
+    data = await make_graph_request("GET", "/me/messages", params=params)
+    if not data or "value" not in data:
         return []
-
-    messages = []
-    for line in raw.split("\n"):
-        parts = line.strip().split("|||")
-        if len(parts) >= 3:
-            messages.append({
-                "sender": parts[0].strip(),
-                "subject": parts[1].strip(),
-                "date": parts[2].strip(),
-                "read": False,
-                "preview": parts[3].strip() if len(parts) > 3 else "",
-            })
-    return messages
-
+        
+    return _parse_graph_messages(data["value"])
 
 async def get_messages_from_account(account_name: str, count: int = 10) -> list[dict]:
     """Get recent messages from a specific account's inbox."""
-    escaped = account_name.replace('"', '\\"')
-    script = f"""
-tell application "Mail"
-    set acctMsgs to messages of mailbox "INBOX" of account "{escaped}"
-    set msgCount to count of acctMsgs
-    set limit to msgCount
-    if limit > {count} then set limit to {count}
-    set output to ""
-    repeat with i from 1 to limit
-        set m to item i of acctMsgs
-        set s to sender of m
-        set subj to subject of m
-        set d to date received of m as string
-        set r to read status of m
-        set output to output & s & "|||" & subj & "|||" & d & "|||" & r & linefeed
-    end repeat
-    return output
-end tell
-"""
-    raw = await _run_mail_script(script, timeout=20)
-    if not raw:
-        return []
-
-    messages = []
-    for line in raw.split("\n"):
-        parts = line.strip().split("|||")
-        if len(parts) >= 4:
-            messages.append({
-                "sender": parts[0].strip(),
-                "subject": parts[1].strip(),
-                "date": parts[2].strip(),
-                "read": parts[3].strip().lower() == "true",
-            })
-    return messages
-
+    # Since we only have one main account authenticated, just return recent messages
+    return await get_recent_messages(count)
 
 async def search_mail(query: str, count: int = 10) -> list[dict]:
-    """Search mail by subject or sender keyword.
-
-    Uses AppleScript filtering on subject. For broader search,
-    we check both subject and sender.
-    """
-    escaped = query.replace('"', '\\"').replace("\\", "\\\\")
-    script = f"""
-tell application "Mail"
-    set output to ""
-    set foundCount to 0
-    set allMsgs to messages of inbox
-    repeat with m in allMsgs
-        if foundCount >= {count} then exit repeat
-        set subj to subject of m
-        set s to sender of m
-        if subj contains "{escaped}" or s contains "{escaped}" then
-            set d to date received of m as string
-            set r to read status of m
-            set output to output & s & "|||" & subj & "|||" & d & "|||" & r & linefeed
-            set foundCount to foundCount + 1
-        end if
-    end repeat
-    return output
-end tell
-"""
-    raw = await _run_mail_script(script, timeout=30)
-    if not raw:
+    """Search mail by subject or sender keyword."""
+    _check_configured()
+    params = {
+        "$top": count,
+        "$search": f'"{query}"',
+        "$select": "subject,sender,isRead,receivedDateTime",
+        "$orderby": "receivedDateTime desc"
+    }
+    data = await make_graph_request("GET", "/me/messages", params=params)
+    if not data or "value" not in data:
         return []
-
-    messages = []
-    for line in raw.split("\n"):
-        parts = line.strip().split("|||")
-        if len(parts) >= 4:
-            messages.append({
-                "sender": parts[0].strip(),
-                "subject": parts[1].strip(),
-                "date": parts[2].strip(),
-                "read": parts[3].strip().lower() == "true",
-            })
-    return messages
-
+        
+    return _parse_graph_messages(data["value"])
 
 async def read_message(subject_match: str) -> dict | None:
-    """Read the full content of a message matching the subject.
-
-    Returns {"sender", "subject", "date", "content"} or None.
-    """
-    escaped = subject_match.replace('"', '\\"').replace("\\", "\\\\")
-    script = f"""
-tell application "Mail"
-    set allMsgs to messages of inbox
-    repeat with m in allMsgs
-        if subject of m contains "{escaped}" then
-            set s to sender of m
-            set subj to subject of m
-            set d to date received of m as string
-            set c to content of m
-            -- Truncate very long emails
-            if length of c > 3000 then
-                set c to text 1 thru 3000 of c
-            end if
-            return s & "|||" & subj & "|||" & d & "|||" & c
-        end if
-    end repeat
-    return ""
-end tell
-"""
-    raw = await _run_mail_script(script, timeout=20)
-    if not raw:
+    """Read the full content of a message matching the subject."""
+    _check_configured()
+    params = {
+        "$top": 1,
+        "$search": f'"subject:{subject_match}"',
+        "$select": "subject,sender,isRead,receivedDateTime,body"
+    }
+    data = await make_graph_request("GET", "/me/messages", params=params)
+    if not data or "value" not in data or not data["value"]:
         return None
+        
+    msg = data["value"][0]
+    return {
+        "subject": msg.get("subject", "No Subject"),
+        "sender": msg.get("sender", {}).get("emailAddress", {}).get("name", "Unknown"),
+        "date": msg.get("receivedDateTime", ""),
+        "read": msg.get("isRead", True),
+        "body": msg.get("body", {}).get("content", "")
+    }
 
-    parts = raw.split("|||", 3)
-    if len(parts) >= 4:
-        return {
-            "sender": parts[0].strip(),
-            "subject": parts[1].strip(),
-            "date": parts[2].strip(),
-            "content": parts[3].strip(),
-        }
-    return None
-
+def _parse_graph_messages(graph_messages: list) -> list[dict]:
+    """Convert MS Graph message format to internal format."""
+    messages = []
+    for m in graph_messages:
+        messages.append({
+            "subject": m.get("subject", "No Subject"),
+            "sender": m.get("sender", {}).get("emailAddress", {}).get("name", "Unknown"),
+            "date": m.get("receivedDateTime", ""),
+            "read": m.get("isRead", True)
+        })
+    return messages
 
 def format_unread_summary(unread: dict) -> str:
     """Format unread counts for voice."""
-    total = unread["total"]
+    total = unread.get("total", 0)
     if total == 0:
         return "Inbox is clear, sir. No unread messages."
 
     parts = []
-    for acct, count in unread["accounts"].items():
+    for acct, count in unread.get("accounts", {}).items():
         if count > 0:
             parts.append(f"{count} in {acct}")
 
@@ -366,7 +142,6 @@ def format_unread_summary(unread: dict) -> str:
     else:
         return f"You have {total} unread {'message' if total == 1 else 'messages'}."
 
-
 def format_messages_for_context(messages: list[dict], label: str = "Recent emails") -> str:
     """Format messages as context for the LLM."""
     if not messages:
@@ -375,16 +150,14 @@ def format_messages_for_context(messages: list[dict], label: str = "Recent email
     lines = [f"{label}:"]
     for m in messages[:10]:
         read_marker = "" if m.get("read") else " [UNREAD]"
-        line = f"  - {m['sender']}: {m['subject']}{read_marker}"
+        line = f"  - {m.get('sender', 'Unknown')}: {m.get('subject', 'No Subject')}{read_marker}"
         if m.get("date"):
-            # Try to shorten the date
             date_str = m["date"]
             if " at " in date_str:
                 date_str = date_str.split(" at ")[0].split(", ", 1)[-1] if ", " in date_str else date_str
             line += f" ({date_str})"
         lines.append(line)
     return "\n".join(lines)
-
 
 def format_messages_for_voice(messages: list[dict]) -> str:
     """Format messages for voice response."""
@@ -394,13 +167,13 @@ def format_messages_for_voice(messages: list[dict]) -> str:
     count = len(messages)
     if count == 1:
         m = messages[0]
-        sender = _short_sender(m["sender"])
-        return f"One message from {sender}: {m['subject']}."
+        sender = _short_sender(m.get("sender", "Unknown"))
+        return f"One message from {sender}: {m.get('subject', 'No Subject')}."
 
     summaries = []
     for m in messages[:5]:
-        sender = _short_sender(m["sender"])
-        summaries.append(f"{sender} regarding {m['subject']}")
+        sender = _short_sender(m.get("sender", "Unknown"))
+        summaries.append(f"{sender} regarding {m.get('subject', 'No Subject')}")
 
     result = f"You have {count} messages. "
     result += ". ".join(summaries[:3])
@@ -408,9 +181,8 @@ def format_messages_for_voice(messages: list[dict]) -> str:
         result += f". And {count - 3} more."
     return result
 
-
 def _short_sender(sender: str) -> str:
-    """Extract just the name from an email sender string like 'John Doe <john@example.com>'."""
+    """Extract just the name from an email sender string."""
     if "<" in sender:
         return sender.split("<")[0].strip().strip('"')
     if "@" in sender:

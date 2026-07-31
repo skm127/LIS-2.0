@@ -1,7 +1,7 @@
 # LIS — Voice AI Assistant
 
 ## Overview
-LIS (Linguistically Intelligent System) is a voice-first AI assistant for Windows. It runs locally on your machine, connecting to your Calendar, Mail, Notes, and can spawn Claude Code sessions for development tasks.
+LIS (Living Intelligent System) is a voice-first AI assistant for Windows. It runs locally on your machine, connecting to your Calendar, Mail, Notes, and can spawn Claude Code sessions for development tasks.
 
 ## Quick Start
 When a user clones this repo and starts Claude Code, help them:
