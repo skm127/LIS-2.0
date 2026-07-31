@@ -102,12 +102,9 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY", "")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
-FISH_API_KEY = os.getenv("FISH_API_KEY", "")
-FISH_VOICE_ID = os.getenv("FISH_VOICE_ID", "7a67f3747f5a43518882ca1a61338a0a")
 
 # Tracks dead APIs (out of credits) to instantly drop to free fallback
-API_DEAD = {"anthropic": False, "fish": False, "gemini": False, "cerebras": False, "openrouter": False}
-FISH_API_URL = "https://api.fish.audio/v1/tts"
+API_DEAD = {"anthropic": False, "gemini": False, "cerebras": False, "openrouter": False}
 USER_NAME = os.getenv("USER_NAME", "sir")
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -1035,10 +1032,10 @@ _last_greeting_time: float = 0
 
 
 # ---------------------------------------------------------------------------
-# TTS (Fish Audio)
+# TTS (Free Edge-TTS / gTTS)
 # ---------------------------------------------------------------------------
 
-async def synthesize_speech_free(text: str) -> Optional[bytes]:
+async def synthesize_speech(text: str) -> Optional[bytes]:
     """Generate high-fidelity free speech audio from text using Edge-TTS (Neural)."""
     log.info(f"Using high-fidelity Indian-Neural voice for: {text[:50]}...")
 
@@ -1063,6 +1060,8 @@ async def synthesize_speech_free(text: str) -> Optional[bytes]:
                 # Fall through to gTTS after exhausting retries
                 break
 
+            _session_tokens["tts_calls"] += 1
+            _append_usage_entry(0, 0, "tts")
             return audio_data
         except Exception as e:
             log.error(f"Edge-TTS error (attempt {attempt + 1}/3): {e}")
@@ -1081,51 +1080,13 @@ async def synthesize_speech_free(text: str) -> Optional[bytes]:
         if len(audio_data) < 512:
             log.error("gTTS also returned tiny audio")
             return None
+        
+        _session_tokens["tts_calls"] += 1
+        _append_usage_entry(0, 0, "tts")
         return audio_data
     except Exception as e:
         log.error(f"gTTS fallback also failed: {e}")
         return None
-
-
-async def synthesize_speech(text: str) -> Optional[bytes]:
-    """Generate speech audio. Attempts Fish Audio but falls back to free Edge-TTS/gTTS."""
-    # Attempt Fish Audio if key looks valid and not marked dead
-    if FISH_API_KEY and len(FISH_API_KEY) > 10 and not API_DEAD["fish"]:
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as http:  # 10s timeout — longer sentences need time
-                response = await http.post(
-                    FISH_API_URL,
-                    headers={
-                        "Authorization": f"Bearer {FISH_API_KEY}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "text": text,
-                        "reference_id": FISH_VOICE_ID,
-                        "format": "mp3",
-                    },
-                )
-                if response.status_code == 200:
-                    audio_data = response.content
-                    # Validate: reject tiny/partial audio that causes glitches
-                    if len(audio_data) < 2048:
-                        log.warning(f"Fish Audio returned tiny audio ({len(audio_data)} bytes), falling back to Edge-TTS")
-                    else:
-                        _session_tokens["tts_calls"] += 1
-                        _append_usage_entry(0, 0, "tts")
-                        return audio_data
-                elif response.status_code == 402:
-                    log.warning("Fish Audio out of credits (402). Disabling for this session.")
-                    API_DEAD["fish"] = True
-                else:
-                    log.warning(f"Fish Audio failed ({response.status_code}), falling back to Edge-TTS")
-        except httpx.TimeoutException:
-            log.warning("Fish Audio timed out (10s), falling back to Edge-TTS")
-        except Exception as e:
-            log.warning(f"Fish Audio exception ({e}), falling back to Edge-TTS")
-    
-    # Fallback to Free Edge-TTS/gTTS
-    return await synthesize_speech_free(text)
 
 
 async def generate_text_groq(messages: list[dict], system_prompt: str = "") -> Optional[str]:
@@ -3359,7 +3320,7 @@ class PreferencesUpdate(BaseModel):
 
 @app.post("/api/settings/keys")
 async def api_settings_keys(body: KeyUpdate):
-    allowed = {"ANTHROPIC_API_KEY", "FISH_API_KEY", "FISH_VOICE_ID", "USER_NAME", "HONORIFIC", "CALENDAR_ACCOUNTS"}
+    allowed = {"ANTHROPIC_API_KEY", "USER_NAME", "HONORIFIC", "CALENDAR_ACCOUNTS"}
     if body.key_name not in allowed:
         return JSONResponse({"success": False, "error": "Invalid key name"}, status_code=400)
     _write_env_key(body.key_name, body.key_value)
@@ -3377,26 +3338,7 @@ async def api_test_anthropic(body: KeyTest):
     except Exception as e:
         return {"valid": False, "error": str(e)[:200]}
 
-@app.post("/api/settings/test-fish")
-async def api_test_fish(body: KeyTest):
-    key = body.key_value or os.getenv("FISH_API_KEY", "")
-    if not key:
-        return {"valid": False, "error": "No key provided"}
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                "https://api.fish.audio/v1/tts",
-                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                json={"text": "test", "reference_id": FISH_VOICE_ID},
-            )
-            if resp.status_code in (200, 201):
-                return {"valid": True}
-            elif resp.status_code == 401:
-                return {"valid": False, "error": "Invalid API key"}
-            else:
-                return {"valid": False, "error": f"HTTP {resp.status_code}"}
-    except Exception as e:
-        return {"valid": False, "error": str(e)[:200]}
+
 
 @app.get("/api/settings/status")
 async def api_settings_status():
@@ -3426,8 +3368,7 @@ async def api_settings_status():
         "uptime_seconds": int(time.time() - _session_start),
         "env_keys_set": {
             "anthropic": bool(env_dict.get("ANTHROPIC_API_KEY", "").strip() and env_dict.get("ANTHROPIC_API_KEY", "") != "your-anthropic-api-key-here"),
-            "fish_audio": bool(env_dict.get("FISH_API_KEY", "").strip() and env_dict.get("FISH_API_KEY", "") != "your-fish-audio-api-key-here"),
-            "fish_voice_id": bool(env_dict.get("FISH_VOICE_ID", "").strip()),
+
             "user_name": env_dict.get("USER_NAME", ""),
         },
     }
