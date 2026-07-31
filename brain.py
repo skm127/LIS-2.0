@@ -54,8 +54,9 @@ class CognitiveCore:
             log.info(f"LIS Thought: {self.last_thought}")
             return self.last_thought
         except Exception as e:
-            if "400" in str(e) or "balance" in str(e).lower():
-                log.warning("Anthropic balance low in CognitiveCore. Disabling client.")
+            err_str = str(e).lower()
+            if "400" in err_str or "401" in err_str or "403" in err_str or "balance" in err_str or "authentication" in err_str:
+                log.warning("Anthropic API failed (auth/balance). Disabling client in CognitiveCore.")
                 self.client = None
             log.warning(f"Internal monologue (Anthropic) failed: {e}")
 

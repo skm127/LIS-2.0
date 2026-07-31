@@ -159,8 +159,9 @@ class EmpathyEngine:
             data["signals"] = signals
             return data
         except Exception as e:
-            if "400" in str(e) or "balance" in str(e).lower():
-                log.warning("Anthropic balance low in EmpathyEngine. Disabling client.")
+            err_str = str(e).lower()
+            if "400" in err_str or "401" in err_str or "403" in err_str or "balance" in err_str or "authentication" in err_str:
+                log.warning("Anthropic API failed (auth/balance). Disabling client in EmpathyEngine.")
                 self.client = None
             log.warning(f"Sentiment analysis (Anthropic) failed: {e}")
 
