@@ -21,6 +21,9 @@ Usage:
 import logging
 import time
 import hashlib
+import os
+import httpx
+import models
 from pathlib import Path
 from typing import Optional
 
@@ -85,8 +88,49 @@ class VectorMemory:
                 return None
         return self._embed_model
 
+    def _embed_nvidia(self, text: str) -> Optional[list[float]]:
+        """Generate embedding using NVIDIA NIM API."""
+        api_key = os.getenv("NVIDIA_API_KEY", "")
+        if not api_key:
+            log.warning("NVIDIA_API_KEY not set for embeddings.")
+            return None
+            
+        try:
+            # We use synchronous httpx because ChromaDB operations here might not be async
+            with httpx.Client(timeout=10.0) as client:
+                resp = client.post(
+                    "https://integrate.api.nvidia.com/v1/embeddings",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "input": [text],
+                        "model": models.NVIDIA_EMBED_DEFAULT,
+                        "input_type": "query",
+                        "truncate": "END"
+                    }
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    return data["data"][0]["embedding"]
+                else:
+                    log.warning(f"NVIDIA embedding failed: {resp.status_code}")
+                    return None
+        except Exception as e:
+            log.warning(f"NVIDIA embedding error: {e}")
+            return None
+
     def _embed(self, text: str) -> Optional[list[float]]:
         """Generate embedding for a text string."""
+        provider = os.getenv("EMBEDDING_PROVIDER", "local").lower()
+        
+        if provider == "nvidia":
+            return self._embed_nvidia(text)
+            
+        # Default local inference fallback (sentence-transformers)
+        # Note: Local is faster for 0-latency inference but consumes RAM/CPU.
+        # NVIDIA network embeddings save local resources but incur network RTT.
         model = self._get_embedder()
         if model is None:
             return None  # ChromaDB will use its default embedder

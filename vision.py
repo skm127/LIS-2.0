@@ -109,6 +109,68 @@ async def analyze_with_gemini(image_bytes: bytes, question: str = "") -> str:
         return f"Vision analysis error: {str(e)[:100]}"
 
 
+async def analyze_with_nvidia(image_bytes: bytes, question: str = "") -> str:
+    """Send screenshot to NVIDIA NIM Vision for analysis."""
+    import httpx
+    import models
+    
+    api_key = os.getenv("NVIDIA_API_KEY", "")
+    if not api_key:
+        return "NVIDIA API key not configured. Cannot analyze screenshot."
+    
+    b64_image = base64.b64encode(image_bytes).decode()
+    
+    prompt = question or (
+        "Describe what's on this computer screen. Include:\n"
+        "1. What application(s) are visible\n"
+        "2. What the user appears to be working on\n"
+        "3. Any notable text, errors, or content visible\n"
+        "Keep it concise (2-3 sentences max)."
+    )
+    
+    payload = {
+        "model": models.NVIDIA_VISION_DEFAULT,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/png;base64,{b64_image}"
+                        }
+                    }
+                ]
+            }
+        ],
+        "max_tokens": 300,
+        "temperature": 0.3
+    }
+    
+    try:
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            resp = await client.post(
+                "https://integrate.api.nvidia.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json"
+                },
+                json=payload
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                text = data["choices"][0]["message"]["content"]
+                log.info(f"NVIDIA vision analysis: {text[:80]}...")
+                return text.strip()
+            else:
+                log.warning(f"NVIDIA vision failed: {resp.status_code} {resp.text[:200]}")
+                return f"Vision analysis failed (HTTP {resp.status_code})"
+    except Exception as e:
+        log.error(f"NVIDIA vision error: {e}")
+        return f"Vision analysis error: {str(e)[:100]}"
+
+
 async def capture_and_analyze(question: str = "") -> dict:
     """Full pipeline: capture screenshot → analyze with vision LLM."""
     image_bytes = await capture_screenshot()

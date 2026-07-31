@@ -101,10 +101,11 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY", "")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
 
 # Tracks dead APIs (out of credits) to instantly drop to free fallback
-API_DEAD = {"anthropic": False, "gemini": False, "cerebras": False, "openrouter": False}
+API_DEAD = {"anthropic": False, "gemini": False, "cerebras": False, "openrouter": False, "nvidia": False}
 USER_NAME = os.getenv("USER_NAME", "sir")
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -1282,6 +1283,52 @@ async def generate_text_openrouter(messages: list[dict], system_prompt: str = ""
         return None
 
 
+async def generate_text_nvidia(messages: list[dict], system_prompt: str = "") -> Optional[str]:
+    """Generate text via NVIDIA NIM API (OpenAI-compatible)."""
+    if not NVIDIA_API_KEY or API_DEAD.get("nvidia"):
+        return None
+
+    log.info("Using NVIDIA fallback...")
+    full_messages = []
+    if system_prompt:
+        full_messages.append({"role": "system", "content": system_prompt[:4000]})
+    full_messages.extend(messages[-10:])
+
+    try:
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            resp = await client.post(
+                "https://integrate.api.nvidia.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {NVIDIA_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": models.NVIDIA_DEFAULT,
+                    "messages": full_messages,
+                    "max_tokens": 1024,
+                }
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                choices = data.get("choices", [])
+                if choices:
+                    return choices[0].get("message", {}).get("content", "")
+                return None
+            elif resp.status_code in [401, 403]:
+                API_DEAD["nvidia"] = True
+                log.warning(f"NVIDIA auth error: {resp.status_code}")
+                return None
+            elif resp.status_code == 429:
+                log.warning("NVIDIA rate limit (429) - skipping without marking dead")
+                return None
+            else:
+                log.error(f"NVIDIA API error: {resp.status_code}")
+                return None
+    except Exception as e:
+        log.error(f"NVIDIA exception: {e}")
+        return None
+
+
 # ---------------------------------------------------------------------------
 # LLM Response logic
 # ---------------------------------------------------------------------------
@@ -1290,7 +1337,7 @@ async def generate_text_openrouter(messages: list[dict], system_prompt: str = ""
 def _build_fallback_chain():
     """Build the ordered list of fallback providers.
 
-    Order: Groq → Gemini → Cerebras → OpenRouter → Ollama
+    Order: Groq → Gemini → Cerebras → OpenRouter → NVIDIA → Ollama
     Each provider is tried in sequence. If ALL fail, a hardcoded
     response keeps LIS alive so she is NEVER truly down.
     """
@@ -1299,6 +1346,7 @@ def _build_fallback_chain():
     chain.append(("Gemini", generate_text_gemini))
     chain.append(("Cerebras", generate_text_cerebras))
     chain.append(("OpenRouter", generate_text_openrouter))
+    chain.append(("NVIDIA", generate_text_nvidia))
     chain.append(("Ollama", generate_text_ollama))
     return chain
 
@@ -1310,9 +1358,9 @@ async def generate_text(
     system: str = "", 
     max_tokens: int = 1000
 ) -> str:
-    """Wrapper for LLM calls with 6-provider fallback chain.
+    """Wrapper for LLM calls with 7-provider fallback chain.
 
-    Chain: Anthropic → Groq → Gemini → Cerebras → OpenRouter → Ollama
+    Chain: Anthropic → Groq → Gemini → Cerebras → OpenRouter → NVIDIA → Ollama
     LIS is NEVER truly down — always has a response.
     """
     # INSTANT SKIP: If Anthropic is dead, jump straight to fallback chain
@@ -3557,7 +3605,8 @@ if __name__ == "__main__":
     gemini_tag = "Gemini [OK]" if GEMINI_API_KEY else "Gemini [--]"
     cerebras_tag = "Cerebras [OK]" if CEREBRAS_API_KEY else "Cerebras [--]"
     openrouter_tag = "OpenRouter [OK]" if OPENROUTER_API_KEY else "OpenRouter [--]"
-    print(f"  LLM Chain: Anthropic -> Groq -> {gemini_tag} -> {cerebras_tag} -> {openrouter_tag} -> Ollama (local)")
+    nvidia_tag = "NVIDIA [OK]" if NVIDIA_API_KEY else "NVIDIA [--]"
+    print(f"  LLM Chain: Anthropic -> Groq -> {gemini_tag} -> {cerebras_tag} -> {openrouter_tag} -> {nvidia_tag} -> Ollama (local)")
     print(f"  Voice:     Edge-TTS (NeerjaNeural) -> gTTS fallback")
     print()
 

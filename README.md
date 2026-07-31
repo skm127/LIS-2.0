@@ -40,6 +40,7 @@ A voice-first AI assistant that lives on your desktop. Speak naturally, and LIS 
 | [Cerebras](https://cloud.cerebras.ai/) | Free | `CEREBRAS_API_KEY` |
 | [Anthropic](https://console.anthropic.com/) | Paid | `ANTHROPIC_API_KEY` |
 | [OpenRouter](https://openrouter.ai/) | Free tier | `OPENROUTER_API_KEY` |
+| [NVIDIA NIM](https://build.nvidia.com/) | Free tier | `NVIDIA_API_KEY` |
 | Ollama (local) | Free | No key needed |
 
 > **Tip:** LIS works with just free-tier providers. Configure Groq + Gemini for the best free experience.
@@ -108,7 +109,7 @@ LIS_PORT=8340
 ## 🏗️ Architecture
 
 ```
-Microphone → Web Speech API → WebSocket → FastAPI → LLM (6-provider chain) → Edge TTS → Speaker
+Microphone → Web Speech API → WebSocket → FastAPI → LLM (7-provider chain) → Edge TTS → Speaker
                                               │
                                               ├── ReAct Engine (autonomous multi-step reasoning)
                                               ├── Vector Memory (ChromaDB semantic search)
@@ -122,7 +123,7 @@ Microphone → Web Speech API → WebSocket → FastAPI → LLM (6-provider chai
 | Backend | FastAPI + Python |
 | Frontend | Vite + TypeScript + Three.js |
 | Communication | WebSocket (JSON + binary audio) |
-| AI | 6-provider fallback (Anthropic, Groq, Gemini, Cerebras, OpenRouter, Ollama) |
+| AI | 7-provider fallback (Anthropic, Groq, Gemini, Cerebras, OpenRouter, NVIDIA, Ollama) |
 | TTS | Edge TTS (neural Indian voice) + gTTS + pyttsx3 fallbacks |
 | Memory | SQLite FTS5 (keyword) + ChromaDB (semantic vectors) |
 | Vision | pyautogui + Gemini Vision API |

@@ -43,6 +43,7 @@ When a user clones this repo and starts Claude Code, help them:
 - `ANTHROPIC_API_KEY` (optional) — Claude API access (Groq fallback if missing)
 - `GROQ_API_KEY` (recommended) — Free Groq API for fast fallback
 - `GEMINI_API_KEY` (optional) — Google Gemini fallback
+- `NVIDIA_API_KEY` (optional) — NVIDIA NIM fallback (Text, Vision, Embeddings)
 - `FISH_API_KEY` (optional) — Fish Audio TTS
 - `FISH_VOICE_ID` (optional) — Voice model ID
 - `USER_NAME` (optional) — Your name for LIS to use

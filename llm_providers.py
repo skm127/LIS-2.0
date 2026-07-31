@@ -263,6 +263,10 @@ class LLMProviders:
                     return resp.json()["choices"][0]["message"]["content"]
                 elif resp.status_code in [401, 403]:
                     self.dead["nvidia"] = True
+                    log.warning(f"NVIDIA auth error: {resp.status_code}")
+                    return None
+                elif resp.status_code == 429:
+                    log.warning("NVIDIA rate limit (429) - skipping without marking dead")
                     return None
                 else:
                     log.error(f"NVIDIA API error: {resp.status_code}")

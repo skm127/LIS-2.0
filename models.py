@@ -22,7 +22,9 @@ CEREBRAS_DEFAULT = "llama3.1-8b"
 OPENROUTER_DEFAULT = "meta-llama/llama-3.1-8b-instruct:free"
 
 # ── NVIDIA NeMo ────────────────────────────────────────────────────────────
-NVIDIA_DEFAULT = "meta/llama-3.1-70b-instruct"
+NVIDIA_DEFAULT = "meta/llama-3.3-70b-instruct"
+NVIDIA_VISION_DEFAULT = "meta/llama-3.2-90b-vision-instruct"
+NVIDIA_EMBED_DEFAULT = "nvidia/nv-embedqa-e5-v5"
 
 # ── Ollama (local) ─────────────────────────────────────────────────────────
 OLLAMA_DEFAULT = "llama3.2:3b"

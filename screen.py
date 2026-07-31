@@ -123,7 +123,19 @@ async def describe_screen(anthropic_client=None) -> str:
         except Exception as e:
             log.warning(f"Gemini vision failed: {e}")
         
-        # Fallback: try Anthropic if available
+        # Fallback 1: try NVIDIA NIM Vision if available
+        try:
+            from vision import analyze_with_nvidia
+            png_bytes = base64.b64decode(screenshot_b64)
+            description = await analyze_with_nvidia(png_bytes)
+            if description and "error" not in description.lower()[:20]:
+                return description
+        except ImportError:
+            pass
+        except Exception as e:
+            log.warning(f"NVIDIA vision failed: {e}")
+        
+        # Fallback 2: try Anthropic if available
         if anthropic_client:
             try:
                 response = await anthropic_client.messages.create(
