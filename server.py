@@ -1374,8 +1374,9 @@ async def generate_text(
             )
             return resp.content[0].text
         except Exception as e:
-            if "balance" in str(e).lower() or "400" in str(e):
-                log.warning(f"Claude credits exhausted. Marking dead. Cascading to free chain.")
+            err_str = str(e).lower()
+            if "balance" in err_str or "400" in err_str or "401" in err_str or "403" in err_str or "authentication" in err_str:
+                log.warning(f"Claude API failed (auth/balance). Marking dead. Cascading to free chain.")
                 API_DEAD["anthropic"] = True
             else:
                 log.error(f"Claude error: {e}")
@@ -2777,6 +2778,8 @@ async def voice_handler(ws: WebSocket):
     active_client = anthropic_client if not API_DEAD.get("anthropic") else None
     empathy = EmpathyEngine(active_client)
     brain = CognitiveCore(active_client)
+
+    global _last_greeting_time
 
     try:
         # ── Greeting - always start in conversation mode ──
