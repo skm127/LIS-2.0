@@ -129,3 +129,77 @@ class AutoSearchSkill(Skill):
             return SkillResult(False, f"Auto-search failed: {e}")
 registry.register(AutoSearchSkill())
 
+class ScrapeSiteSkill(Skill):
+    name = "scrape_site"
+    description = "Scrape structured data from a URL based on a JSON schema."
+
+    async def execute(self, job_name: str, url: str, schema: dict, **kwargs) -> SkillResult:
+        try:
+            import scraper
+            res = await scraper.run_scrape_job(job_name, url, schema)
+            if "error" in res:
+                return SkillResult(False, res["error"])
+            return SkillResult(True, f"Scraping completed and saved to {res['file']}", data=res['data'])
+        except Exception as e:
+            return SkillResult(False, f"Scraping failed: {e}")
+registry.register(ScrapeSiteSkill())
+
+class RerunScrapeJobSkill(Skill):
+    name = "rerun_scrape_job"
+    description = "Re-run a previously saved scrape job by name."
+
+    async def execute(self, job_name: str, **kwargs) -> SkillResult:
+        try:
+            import scraper
+            res = await scraper.run_scrape_job(job_name)
+            if "error" in res:
+                return SkillResult(False, res["error"])
+            return SkillResult(True, f"Scrape job {job_name} rerun successfully and saved to {res['file']}", data=res['data'])
+registry.register(RerunScrapeJobSkill())
+
+class WebTaskSkill(Skill):
+    name = "web_task"
+    description = "Navigate the web and fill out forms or perform actions."
+
+    def __init__(self):
+        super().__init__()
+        # State tracking for multi-stage confirmation
+        self._in_progress = {}
+
+    async def execute(self, instruction: str, **kwargs) -> SkillResult:
+        try:
+            confirmed = kwargs.get("confirmed", False)
+            
+            # Use task hash as a simple session key
+            import hashlib
+            task_id = hashlib.md5(instruction.encode()).hexdigest()
+
+            # Stage 0: Initial request, hasn't started yet
+            if not confirmed and task_id not in self._in_progress:
+                return {"success": False, "needs_confirmation": True, 
+                        "confirmation": f"I'll launch the browser to {instruction} — proceed?"}
+            
+            import browser
+            b = browser.LisBrowser()
+
+            # Stage 1: User approved the intent. Navigate and fill form.
+            if confirmed and task_id not in self._in_progress:
+                self._in_progress[task_id] = "stage_1_done"
+                summary = await b.execute_web_task(instruction)
+                return {"success": False, "needs_confirmation": True, 
+                        "confirmation": f"Here is what I am about to submit: {summary}. Please confirm to proceed with the final click."}
+            
+            # Stage 2: User approved the final submission.
+            if confirmed and self._in_progress.get(task_id) == "stage_1_done":
+                result = await b.confirm_web_task()
+                del self._in_progress[task_id]
+                return SkillResult(True, f"Web task completed: {result}")
+
+            # Fallback if state is weird
+            del self._in_progress[task_id]
+            return SkillResult(False, "Task state mismatch, aborting.")
+
+        except Exception as e:
+            return SkillResult(False, f"Web task failed: {e}")
+
+registry.register(WebTaskSkill())

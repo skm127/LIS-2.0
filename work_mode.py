@@ -16,6 +16,8 @@ import os
 import shutil
 from pathlib import Path
 
+from qa import QAAgent, MAX_RETRIES
+
 log = logging.getLogger("lis.work_mode")
 
 SESSION_FILE = Path(__file__).parent / "data" / "active_session.json"
@@ -39,6 +41,7 @@ class WorkSession:
         self._message_count = 0  # Track if this is first message (no --continue)
         self._status = "idle"  # idle, working, done
         self._cli_dead = False  # Circuit breaker: True after first CLI failure
+        self.qa_agent = QAAgent()
 
     @property
     def active(self) -> bool:
@@ -61,7 +64,7 @@ class WorkSession:
         self._status = "idle"
         log.info(f"Work mode started: {self._project_name} ({working_dir})")
 
-    async def send(self, user_text: str) -> str:
+    async def send(self, user_text: str, notify_callback=None) -> str:
         """Send a message to claude -p and get the full response.
 
         First message in a session: fresh claude -p
@@ -89,6 +92,9 @@ class WorkSession:
             cmd.append("--continue")
 
         self._status = "working"
+        
+        if notify_callback:
+            await notify_callback("running task...")
 
         try:
             process = await asyncio.create_subprocess_exec(
@@ -106,7 +112,6 @@ class WorkSession:
 
             response = stdout.decode().strip()
             self._message_count += 1
-            self._status = "done"
 
             if process.returncode != 0:
                 error = stderr.decode().strip()[:200]
@@ -118,7 +123,34 @@ class WorkSession:
                 return CLI_DEAD_SENTINEL
 
             log.info(f"Claude Code response for {self._project_name} ({len(response)} chars)")
-            return response
+            
+            # QA Loop
+            attempt = 1
+            current_response = response
+            while attempt <= MAX_RETRIES:
+                if notify_callback:
+                    await notify_callback(f"verifying result (attempt {attempt})...")
+                
+                qa_result = await self.qa_agent.verify(user_text, current_response, self._working_dir)
+                if qa_result.passed:
+                    if notify_callback and attempt > 1:
+                        await notify_callback("QA passed after fixes.")
+                    break
+                
+                if notify_callback:
+                    await notify_callback(f"QA failed, fixing issues: {', '.join(qa_result.issues)}...")
+                
+                retry_resp = await self.qa_agent.auto_retry(user_text, qa_result.issues, self._working_dir, attempt)
+                if retry_resp.get("status") == "completed":
+                    current_response = retry_resp.get("result", "")
+                    attempt += 1
+                else:
+                    if notify_callback:
+                        await notify_callback(f"auto-retry failed: {retry_resp.get('error')}")
+                    break
+                    
+            self._status = "done"
+            return current_response
 
         except asyncio.TimeoutError:
             log.error("claude -p timed out after 300s")

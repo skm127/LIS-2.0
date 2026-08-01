@@ -2737,8 +2737,14 @@ async def handle_skill_execution(name: str, args: dict, confirmed: bool = False)
              elif name == "volume_control": args = {"direction": str(args)}
              elif name == "brightness_set": args = {"level": args}
              else: args = {}
-
+             
+        args["confirmed"] = confirmed
         result = await skill.execute(**args)
+        
+        # If the skill returns a result dict with needs_confirmation directly, parse it
+        if isinstance(result, dict) and result.get("needs_confirmation"):
+            return result
+        # Otherwise use the standard SkillResult
         return {"success": result.success, "confirmation": result.confirmation}
     except Exception as e:
         import traceback
@@ -2974,7 +2980,13 @@ async def voice_handler(ws: WebSocket):
                 if is_confirm:
                     log.info(f"User confirmed pending action: {action_name}({action_args})")
                     result = await handle_skill_execution(action_name, action_args, confirmed=True)
-                    response_text = result.get("confirmation") or "Done, sir."
+                    
+                    if result and result.get("needs_confirmation"):
+                        # Re-queue for multi-stage confirmations
+                        pending_action = {"action": action_name, "args": action_args}
+                        response_text = result.get("confirmation")
+                    else:
+                        response_text = result.get("confirmation") or "Done, sir."
 
                     await ws.send_json({"type": "status", "state": "speaking"})
                     audio = await synthesize_speech(response_text)

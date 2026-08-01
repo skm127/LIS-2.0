@@ -375,6 +375,9 @@ class LLMProviders:
             model: Anthropic model name (used only for Anthropic)
             prefer_provider: Force a specific provider ("groq", "gemini", etc.)
         """
+        if os.getenv("FORCE_LOCAL_ONLY", "false").lower() == "true":
+            return await self._generate_ollama(messages, system, max_tokens)
+
         # If a specific provider is requested
         if prefer_provider:
             provider_map = {
@@ -430,6 +433,9 @@ class LLMProviders:
         self, messages: list[dict], system: str = "", max_tokens: int = 150
     ) -> str:
         """Quick generation — prefer speed over quality. Uses Groq/Cerebras first."""
+        if os.getenv("FORCE_LOCAL_ONLY", "false").lower() == "true":
+            return await self._generate_ollama(messages, system, max_tokens)
+
         # Try fast providers first
         for fn in [self._generate_groq, self._generate_cerebras, self._generate_gemini]:
             try:

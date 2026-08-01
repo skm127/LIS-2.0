@@ -278,6 +278,62 @@ class LisBrowser:
                 key_findings=[]
             )
 
+    # -- Agentic Web Actions (Write) -------------------------------------------
+
+    async def execute_web_task(self, task_description: str) -> str:
+        """Stage 1 of web task: Navigate and fill out, but DO NOT submit."""
+        await self._ensure_browser()
+        llm = self._get_llm()
+        
+        # We explicitly instruct the agent to stop before the final irreversible action
+        safe_task = (
+            f"Task: {task_description}\n\n"
+            "CRITICAL INSTRUCTIONS:\n"
+            "1. Navigate to the necessary page and fill out all required fields.\n"
+            "2. DO NOT click the final 'Submit', 'Buy', 'Book', or 'Confirm' button.\n"
+            "3. Instead, extract the exact values you filled in, and the final price/cost if applicable.\n"
+            "4. Return a clear summary of what you are about to submit."
+        )
+        
+        log.info(f"Starting web_task (Stage 1) for: {task_description}")
+        agent = Agent(
+            task=safe_task,
+            llm=llm,
+            browser=self._browser
+        )
+        
+        try:
+            history = await agent.run()
+            final_result = history.final_result() if hasattr(history, "final_result") else str(history)
+            return final_result or "Form filled. Please confirm details."
+        except Exception as e:
+            log.error(f"Browser Agent failed on web_task: {e}")
+            return f"Error executing task: {e}"
+
+    async def confirm_web_task(self) -> str:
+        """Stage 2 of web task: Click the final submit button."""
+        if not self._browser:
+            return "Error: No active browser session found to confirm."
+            
+        llm = self._get_llm()
+        
+        task = "Click the final 'Submit', 'Buy', 'Book', or 'Confirm' button to complete the form on the current page. Return a success message."
+        
+        log.info("Starting web_task (Stage 2) - clicking submit")
+        agent = Agent(
+            task=task,
+            llm=llm,
+            browser=self._browser
+        )
+        
+        try:
+            history = await agent.run()
+            final_result = history.final_result() if hasattr(history, "final_result") else str(history)
+            return final_result or "Task completed successfully."
+        except Exception as e:
+            log.error(f"Browser Agent failed on confirm_web_task: {e}")
+            return f"Error completing task: {e}"
+
     # -- Lifecycle -------------------------------------------------------------
 
     async def close(self):

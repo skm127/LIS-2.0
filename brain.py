@@ -160,6 +160,21 @@ class CognitiveCore:
         if any(m in t for m in correction_markers):
             return "correction"
 
+        # Web Scraping requests
+        scrape_markers = ["scrape", "extract", "get price and", "pull data from", "parse the"]
+        if any(m in t for m in scrape_markers):
+            return "scrape_request"
+
+        # Agentic Web Actions (writes)
+        web_action_markers = ["book a", "book me", "fill out", "order a", "buy ", "submit", "reserve"]
+        if any(m in t for m in web_action_markers) or "web task" in t:
+            return "web_action"
+
+        # Autonomous Coding Tasks
+        auto_code_markers = ["add a login", "build a dashboard", "refactor the", "implement a", "create a new feature"]
+        if any(m in t for m in auto_code_markers):
+            return "autonomous_code_task"
+
         # Command detection — direct action requests
         command_markers = ["open ", "play ", "search ", "set ", "start ", "stop ",
                           "turn ", "close ", "launch ", "show me", "tell me the"]
