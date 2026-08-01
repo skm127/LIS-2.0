@@ -518,6 +518,21 @@ def record_interaction(sentiment: float, state: str, intent: str = "", rapport: 
     conn.commit()
     conn.close()
 
+def get_last_emotional_state() -> dict | None:
+    """Restore last emotional state if the last interaction was recent (< 2 hours)."""
+    conn = _get_db()
+    row = conn.execute(
+        "SELECT lis_state, rapport_delta, sentiment_score, timestamp FROM interactions ORDER BY timestamp DESC LIMIT 1"
+    ).fetchone()
+    conn.close()
+    if row and (time.time() - row["timestamp"]) < 7200:  # 2 hours
+        return {
+            "mood": row["lis_state"],
+            "rapport": max(0, min(100, 90.0 + row["rapport_delta"])),  # Approximate
+            "sentiment": row["sentiment_score"]
+        }
+    return None
+
 def get_soul_context(limit: int = 5) -> dict:
     """Get recent emotional trend and rapport context."""
     conn = _get_db()

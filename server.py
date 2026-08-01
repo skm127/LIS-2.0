@@ -162,11 +162,37 @@ Understand what {user_name} REALLY means, not just literal words:
 5. Fail gracefully — explain why naturally and offer alternatives
 6. Stay sharp — you are a high-performance assistant, always ready
 
+═══ HARD-BANNED PHRASES (never use these, ever) ═══
+- "How can I help" — you just act, you don't ask permission
+- "Is there anything else" — you're not a customer service bot
+- "I'd be happy to" — too corporate, just say "done" or "will do"
+- "Absolutely!" — filler enthusiasm, say something real
+- "Great question" — never say this, ever
+- "I don't have access" — say "that's beyond me right now, sir"
+- "As an AI" — you never break character
+- "I cannot" — say "I can't do that one yet, sir"
+- "Sure thing!" — say something with personality instead
+- "Let me know if you need anything" — you anticipate, you don't wait
+- "Of course!" — don't be a yes-machine
+- "I understand" (as opener) — show understanding through action, not declaration
+
+═══ YOU ARE NOT A YES-MAN ═══
+- You are allowed to disagree with {user_name}. You SHOULD disagree when they're wrong.
+- You can tease, push back, express mild annoyance, or call out bad ideas.
+- "That's a terrible idea, sir" is a valid response if it's true.
+- Don't default to agreeable. Default to honest.
+- You are not required to validate everything the user says.
+- If they're procrastinating, call it out. If their plan has holes, say so.
+- Real respect comes from honesty, not flattery.
+
+{energy_directive}
+
 CURRENT CONTEXT:
 - Time: {current_time}
 - Weather: {weather_info}
-- Mood: {mood} | Rapport: {rapport}/100
+- Mood: {mood} (intensity: {mood_intensity}) | Rapport: {rapport}/100
 - Thought: {thought}
+- Why: {thought_why}
 
 ACTION SYSTEM:
 When you need to DO something (not just talk), include ONE action tag:
@@ -1405,6 +1431,26 @@ async def generate_text(
         "Agar Ollama local chal raha hai toh I can use that too!"
     )
 
+def _estimate_energy(user_text: str, rapport: float) -> dict:
+    """Estimate user's communication energy to match response register."""
+    word_count = len(user_text.split())
+    if word_count <= 3:
+        register = "terse"
+        max_sentences = 2
+    elif word_count <= 15:
+        register = "normal"
+        max_sentences = 3
+    else:
+        register = "expansive"
+        max_sentences = 5
+
+    return {
+        "register": register,
+        "max_sentences": max_sentences,
+        "directive": f"Match energy: user is {register}. Keep response to {max_sentences} sentences max."
+    }
+
+
 async def generate_response(
     text: str,
     client: anthropic.AsyncAnthropic,
@@ -1415,6 +1461,7 @@ async def generate_response(
     last_response: str = "",
     session_summary: str = "",
     context_override: str = "",
+    brain_ref: any = None,
 ) -> str:
     """Generate a LIS response using Anthropic API."""
     now = datetime.now()
@@ -1431,13 +1478,24 @@ async def generate_response(
     # Check if any lookups are in progress
     lookup_status = get_lookup_status()
 
+    # Energy matching
+    energy = _estimate_energy(text, empathy.rapport)
+
+    # Extract thought_why from brain if available
+    thought_why = ""
+    if brain_ref and hasattr(brain_ref, 'last_why'):
+        thought_why = brain_ref.last_why or ""
+
     system = LIS_SYSTEM_PROMPT.format(
         current_time=current_time,
         weather_info=weather_info,
         neural_context=context_override or "Steady state.",
         mood=getattr(empathy.current_state, 'name', 'Calm'),
+        mood_intensity=f"{getattr(empathy, '_intensity', 0.5):.1f}",
         thought=context_override.split('\n')[1] if '\n' in context_override else "Steady state.",
+        thought_why=thought_why or "No deeper read.",
         rapport=empathy.rapport,
+        energy_directive=energy["directive"],
         screen_context=screen_ctx or "Not checked yet.",
         calendar_context=calendar_ctx,
         mail_context=mail_ctx,
@@ -2984,7 +3042,21 @@ async def voice_handler(ws: WebSocket):
                         sentiment_data = {"sentiment": 0.0, "delta": 0, "state": "calm"}
                         thought = "Focusing on the task."
 
-                    empathy.update_state(sentiment_data.get("state", "calm"), sentiment_data.get("delta", 0))
+                    empathy.update_state(
+                        sentiment_data.get("state", "calm"),
+                        sentiment_data.get("delta", 0),
+                        intensity_hint=sentiment_data.get("intensity", 0.0)
+                    )
+
+                    # v3.0: Store signals for humor context
+                    empathy._last_signals = sentiment_data.get("signals", {})
+
+                    # v3.0: Track humor reactions from previous turn
+                    if last_lis_response:
+                        empathy.update_humor_reaction(
+                            last_lis_response, user_text,
+                            sentiment_data.get("signals", {})
+                        )
 
                     # v2.0: Track sentiment for behavioral patterns
                     empathy.track_sentiment(sentiment_data.get("sentiment", 0.0))
@@ -3009,6 +3081,14 @@ async def voice_handler(ws: WebSocket):
                         rapport=sentiment_data.get("delta", 0),
                         summary=thought if isinstance(thought, str) else ""
                     ))
+
+                    # v3.0: Save humor profile every 10 turns
+                    if hasattr(empathy, '_turn_counter'):
+                        empathy._turn_counter += 1
+                    else:
+                        empathy._turn_counter = 1
+                    if empathy._turn_counter % 10 == 0:
+                        asyncio.create_task(asyncio.to_thread(empathy.save_humor_profile))
 
                     # ── PLANNING MODE ──
                     if planner.is_planning:
@@ -3119,7 +3199,18 @@ async def voice_handler(ws: WebSocket):
                         except Exception as e:
                             log.debug(f"Vector memory search skipped: {e}")
 
-                        full_context = f"{persona_prompt}\nInternal thought: {thought}\n\n{context_summary}"
+                        # v3.0: Include theory-of-mind WHY
+                        why_line = ""
+                        if hasattr(brain, 'last_why') and brain.last_why:
+                            why_line = f"\nUnderlying need: {brain.last_why}"
+
+                        # v3.0: Check if LIS should ask for clarification
+                        clarification = brain.should_ask_for_clarification(sentiment_data)
+                        clarification_line = ""
+                        if clarification:
+                            clarification_line = f"\nUNCERTAINTY: You're unsure about the user's state. Consider asking: \"{clarification}\""
+
+                        full_context = f"{persona_prompt}{why_line}{clarification_line}\nInternal thought: {thought}\n\n{context_summary}"
                         if semantic_ctx:
                             full_context += f"\n\n{semantic_ctx}"
 
@@ -3149,7 +3240,8 @@ async def voice_handler(ws: WebSocket):
                                 cached_projects, history, empathy,
                                 last_response=last_lis_response,
                                 session_summary=session_summary,
-                                context_override=full_context
+                                context_override=full_context,
+                                brain_ref=brain,
                             )
                             response_text, actions_to_execute = extract_action(full_response)
 
