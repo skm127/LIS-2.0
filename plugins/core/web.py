@@ -102,30 +102,38 @@ class AutoSearchSkill(Skill):
         """Search DuckDuckGo instant answers API for quick facts."""
         try:
             import httpx
-            from urllib.parse import quote
-            url = f"https://api.duckduckgo.com/?q={quote(query)}&format=json&no_html=1"
-            async with httpx.AsyncClient(timeout=8.0) as client:
-                resp = await client.get(url)
+            from bs4 import BeautifulSoup
+            import urllib.parse
+            import re
+            
+            url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(query)}"
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+            
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+                resp = await client.post(url, headers=headers, data={'q': query}) # DDG HTML prefers POST for the first query
+                
+                # Fallback to GET if POST fails or returns empty
+                if resp.status_code != 200 or "No results" in resp.text:
+                    resp = await client.get(url, headers=headers)
+                
                 if resp.status_code == 200:
-                    data = resp.json()
-                    # Try Abstract first
-                    abstract = data.get("AbstractText", "")
-                    if abstract:
-                        return SkillResult(True, f"{abstract[:500]}", data=abstract)
-                    # Try Answer
-                    answer = data.get("Answer", "")
-                    if answer:
-                        return SkillResult(True, f"{answer}", data=answer)
-                    # Try Related Topics
-                    topics = data.get("RelatedTopics", [])
-                    if topics and isinstance(topics[0], dict):
-                        text = topics[0].get("Text", "")
+                    soup = BeautifulSoup(resp.text, 'html.parser')
+                    snippets = []
+                    for a in soup.find_all('a', class_='result__snippet'):
+                        text = a.get_text(strip=True)
                         if text:
-                            return SkillResult(True, f"{text[:500]}", data=text)
-            # Fallback: open browser
+                            snippets.append(text)
+                            
+                    if snippets:
+                        # Combine top 3 snippets for a rich summary
+                        combined = " ".join(snippets[:3])
+                        # Clean up weird characters
+                        combined = re.sub(r'[^\x00-\x7F]+', ' ', combined)
+                        return SkillResult(True, f"I found some information: {combined[:800]}", data=combined)
+            
+            # Fallback: open browser if scraping fails
             import webbrowser
-            from urllib.parse import quote as q
-            webbrowser.open(f'https://www.google.com/search?q={q(query)}')
+            webbrowser.open(f'https://www.google.com/search?q={urllib.parse.quote(query)}')
             return SkillResult(True, f"I've opened a search for {query} in your browser, sir.")
         except Exception as e:
             return SkillResult(False, f"Auto-search failed: {e}")

@@ -143,7 +143,12 @@ class LaunchAppSkill(Skill):
                 app_id = matched_app.get("AppId") or matched_app.get("AppID") or matched_app.get("appid", "")
                 if app_id:
                     try:
-                        launch_cmd = f'explorer.exe shell:AppsFolder\\{app_id}'
+                        # Check if AppId is actually a direct executable path
+                        if ":" in app_id and "\\" in app_id and app_id.lower().endswith(".exe"):
+                            launch_cmd = f'start "" "{app_id}"'
+                        else:
+                            launch_cmd = f'explorer.exe shell:AppsFolder\\{app_id}'
+                            
                         subprocess.Popen(launch_cmd, shell=True)
                         return SkillResult(True, f"Opening {match_name} for you!")
                     except Exception as e:
