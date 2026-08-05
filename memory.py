@@ -740,11 +740,12 @@ async def extract_memories(user_text: str, lis_response: str, anthropic_client) 
                 "- PREFERENCES: likes, dislikes, favorites\n"
                 "- PEOPLE: names and relationships (mom=Priya, friend=Rahul)\n"
                 "- HABITS: routines, patterns (works out mornings, codes at night)\n"
+                "- LANGUAGE: user's slang, Hinglish words, or speaking style\n"
                 "- CORRECTIONS: if user corrected the AI, what they actually meant\n"
                 "NOT opinions, greetings, or casual chat. "
-                'Return JSON array: [{"type": "fact|preference|project|person|decision|habit|correction", '
+                'Return JSON array: [{"type": "fact|preference|project|person|decision|habit|language|correction", '
                 '"content": "...", "importance": 1-10, '
-                '"kg_category": "preference|person|habit|routine|goal|dislike|domain_expertise", '
+                '"kg_category": "preference|person|habit|routine|goal|dislike|domain_expertise|language_style", '
                 '"kg_key": "short_key", "kg_value": "value"}] '
                 "Return [] if nothing worth remembering. Be selective."
             ),

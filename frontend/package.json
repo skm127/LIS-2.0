@@ -13,6 +13,7 @@
     "vite": "^6.0.0"
   },
   "dependencies": {
+    "@mediapipe/tasks-vision": "^1.0.1",
     "@types/three": "^0.183.1",
     "three": "^0.183.2"
   }

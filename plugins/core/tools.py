@@ -7,6 +7,7 @@ import difflib
 import subprocess
 import re
 import memory
+import ast
 from typing import Optional, List, Dict, Callable, Any
 
 log = logging.getLogger("LIS.plugins")
@@ -26,7 +27,11 @@ class CalculatorSkill(Skill):
                 "log": math.log, "log10": math.log10, "pi": math.pi, "e": math.e,
                 "ceil": math.ceil, "floor": math.floor
             }
-            result = eval(expression, {"__builtins__": {}}, allowed)
+            try:
+                tree = ast.parse(expression, mode='eval')
+                result = eval(compile(tree, '<string>', 'eval'), {"__builtins__": {}}, allowed)
+            except Exception as e:
+                return SkillResult(False, f"Unsafe or invalid expression: {e}")
             return SkillResult(True, f"The result is {result}, sir.")
         except Exception as e:
             return SkillResult(False, f"I couldn't calculate that: {e}, sir.")

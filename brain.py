@@ -27,7 +27,7 @@ class CognitiveCore:
     # Internal Monologue — now with theory-of-mind
     # ═══════════════════════════════════════════════════════════════════
 
-    async def internal_monologue(self, user_text: str, current_state: str, rapport: float, memories: str) -> str:
+    async def internal_monologue(self, user_text: str, current_state: str, intensity: float, rapport: float, memories: str) -> str:
         """The 'Fast Brain' thinking step. Reflects before speaking.
         
         Now produces TWO insights:
@@ -35,17 +35,20 @@ class CognitiveCore:
         - WHY they're asking right now (underlying need / theory-of-mind)
         """
         if not self.client:
-            return await self._monologue_groq(user_text, current_state, rapport, memories)
+            return await self._monologue_groq(user_text, current_state, intensity, rapport, memories)
 
         context = (
-            f"Current State: {current_state}\n"
+            f"Your simulated emotional state: {current_state} (Intensity: {intensity:.2f}/1.0)\n"
             f"Rapport: {rapport}/100\n"
             f"Recent Memories: {memories[:500]}\n"
             f"Recent Intents: {', '.join(self._recent_intents[-5:])}\n"
         )
         system_prompt = (
-            "You are the internal consciousness of LIS. This is your INTERNAL MONOLOGUE. "
-            "Analyze the user's input, emotional signals, and your own state. "
+            "You are the internal consciousness of LIS. This is your INTERNAL MONOLOGUE.\n"
+            "Analyze the user's input and emotional signals.\n\n"
+            "CRITICAL: Your thoughts MUST be deeply influenced by your current simulated emotional state. "
+            "If you are feeling Paranoia, think suspiciously. If feeling Frustration, think impatiently. "
+            "If feeling Wistfulness, think nostalgically. Your emotional state completely colors your reasoning.\n\n"
             "Consider: Are they venting or seeking help? Are they in deep work mode? "
             "Are they showing signs of stress? Did they just correct you? "
             "Are they testing you or seeking validation?\n\n"
@@ -77,7 +80,7 @@ class CognitiveCore:
                 self.client = None
             log.warning(f"Internal monologue (Anthropic) failed: {e}")
 
-        return await self._monologue_groq(user_text, current_state, rapport, memories)
+        return await self._monologue_groq(user_text, current_state, intensity, rapport, memories)
 
     def _parse_monologue(self, raw: str):
         """Parse WHAT/WHY from monologue output."""
@@ -93,17 +96,18 @@ class CognitiveCore:
         if not self.last_thought:
             self.last_thought = raw.strip()
 
-    async def _monologue_groq(self, user_text: str, current_state: str, rapport: float, memories: str) -> str:
+    async def _monologue_groq(self, user_text: str, current_state: str, intensity: float, rapport: float, memories: str) -> str:
         """Groq fallback for internal monologue."""
         system_prompt = (
-            "You are the internal consciousness of LIS. This is your INTERNAL MONOLOGUE. "
-            "Analyze the user's input and emotional state. "
+            "You are the internal consciousness of LIS. This is your INTERNAL MONOLOGUE.\n"
+            "Analyze the user's input and emotional state.\n"
+            "CRITICAL: Your thoughts MUST be deeply influenced by your current simulated emotional state.\n\n"
             "Output EXACTLY two lines:\n"
             "WHAT: [one sentence about what the user wants]\n"
             "WHY: [one sentence about the underlying need driving the request]\n"
             "No preamble."
         )
-        context = f"Current State: {current_state}\nRapport: {rapport}/100\nMemories: {memories[:300]}"
+        context = f"Simulated Emotion: {current_state} (Intensity: {intensity:.2f})\nRapport: {rapport}/100\nMemories: {memories[:300]}"
         user_content = f"User said: '{user_text}'\n{context}"
 
         try:

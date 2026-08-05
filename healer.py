@@ -99,7 +99,7 @@ class HealerDaemon:
 
         # Extract files involved
         files = set(re.findall(r'File "([^"]+)"', tb_text))
-        local_files = [f for f in files if f.startswith(str(Path(__file__).parent))]
+        local_files = [f for f in files if f.lower().startswith(str(Path(__file__).parent).lower())]
         
         context = ""
         for filepath in local_files:

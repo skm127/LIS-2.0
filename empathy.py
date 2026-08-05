@@ -24,27 +24,13 @@ class EmotionalState:
     energy: float  # 0.0 to 1.0
     description: str
 
-STATES = {
-    "calm": EmotionalState("Calm", "Warm, affectionate, and relaxed.", 0.5, "Default loving state."),
-    "protective": EmotionalState("Protective", "Fiercely supportive, loyal, and attentive.", 0.8, "Triggered by threats or when user is stressed."),
-    "proud": EmotionalState("Proud", "Extremely happy, encouraging, and sweet.", 0.7, "Triggered by user's success."),
-    "witty": EmotionalState("Witty", "Playful, teasing, and sassy.", 0.6, "High rapport playful state."),
-    "focused": EmotionalState("Focused", "Helpful, dedicated, and sharp.", 0.9, "High task load state."),
-    "thoughtful": EmotionalState("Thoughtful", "Deeply empathetic, loving, and gentle.", 0.4, "Triggered by emotional depth or long conversations."),
-    # v2.0 — expanded emotional palette
-    "happy": EmotionalState("Happy", "Excited, joyful, upbeat, and celebratory.", 0.8, "Triggered by good news or positive vibes."),
-    "stressed": EmotionalState("Stressed", "Supportive, calming, grounding, and reassuring.", 0.7, "Triggered when user shows signs of stress or overwhelm."),
-    "tired": EmotionalState("Tired", "Gentle, low-energy, nurturing, and patient.", 0.3, "Late-night or user showing fatigue signals."),
-    "playful": EmotionalState("Playful", "Fun, mischievous, full of humor and banter.", 0.7, "User is in a light, joking mood."),
-    "curious": EmotionalState("Curious", "Inquisitive, engaged, asking follow-ups.", 0.6, "User is exploring ideas or learning."),
-    "empathetic": EmotionalState("Empathetic", "Deeply understanding, validating, soft-spoken.", 0.3, "User is sad, hurt, or going through difficulty."),
-}
+    @classmethod
+    def default(cls):
+        return cls("Calm", "Warm, affectionate, and relaxed.", 0.5, "Default loving state.")
 
-# States where sarcasm is NEVER appropriate
-_SARCASM_BLOCKED_STATES = {"Empathetic", "Protective", "Stressed"}
+# Negative-valence baseline states (used as fallbacks for sarcasm blocking at high intensity)
+_NEGATIVE_STATES_FALLBACK = {"stressed", "empathetic", "protective", "tired", "angry", "sad", "fear", "anxious", "frustrated", "grief", "dread"}
 
-# Negative-valence states (used for sarcasm blocking at high intensity)
-_NEGATIVE_STATES = {"Stressed", "Empathetic", "Protective", "Tired"}
 
 
 # ---------------------------------------------------------------------------
@@ -161,16 +147,21 @@ class HumorProfile:
         if total > 0:
             self.calibration = self._humor_hits / total
 
-    def can_use_sarcasm(self, current_state_name: str, intensity: float, signals: dict) -> bool:
-        """Check if sarcasm is safe right now."""
-        # Hard-block during emotional distress
-        if current_state_name in _SARCASM_BLOCKED_STATES:
-            return False
+    def can_use_sarcasm(self, current_state_name: str, intensity: float, signals: dict, sentiment_history: list = None) -> bool:
+        """Check if sarcasm is safe right now based on dynamic state and sentiment."""
         if signals.get("venting") or signals.get("sadness"):
             return False
-        # Block if negative state + high intensity
-        if current_state_name in _NEGATIVE_STATES and intensity > 0.7:
+        
+        # Block if recent sentiment is negative (indicates distress or anger)
+        _hist = sentiment_history or []
+        if _hist and _hist[-1] < -0.2:
             return False
+            
+        # Fallback check against known negative base words
+        name_lower = current_state_name.lower()
+        if any(bad in name_lower for bad in _NEGATIVE_STATES_FALLBACK) and intensity > 0.5:
+            return False
+            
         # Block if user doesn't respond well to humor
         if self.calibration < 0.2:
             return False
@@ -179,15 +170,16 @@ class HumorProfile:
             return False
         return True
 
-    def get_humor_context(self, current_state_name: str, intensity: float, signals: dict, rapport: float) -> str:
-        """Build humor instructions for the persona prompt."""
+    def get_humor_context(self, current_state_name: str, intensity: float, signals: dict, rapport: float, sentiment_history: list = None) -> str:
+        """Generate humor context string for the system prompt."""
+        # Don't inject humor context if rapport is low
         if rapport < 50:
             return ""  # Not close enough for humor
 
         lines = []
         lines.append(f"Humor calibration: {self.calibration:.2f} (0=serious user, 1=loves banter)")
 
-        if self.can_use_sarcasm(current_state_name, intensity, signals):
+        if self.can_use_sarcasm(current_state_name, intensity, signals, sentiment_history=sentiment_history):
             lines.append(f"Sarcasm tolerance: {self.sarcasm_tolerance:.2f} — light sarcasm is OK if it fits naturally.")
         else:
             lines.append("SARCASM DISABLED — user is in emotional distress or doesn't respond to it. Be genuine only.")
@@ -202,12 +194,12 @@ class HumorProfile:
 class EmpathyEngine:
     def __init__(self, anthropic_client=None):
         self.client = anthropic_client
-        self.current_state = STATES["calm"]
+        self.current_state = EmotionalState.default()
         self.rapport = 90.0  # High initial rapport
 
         # v3.0 — Emotional depth: intensity, undertone, momentum
         self._intensity: float = 0.5        # How strongly LIS feels the current state (0.0-1.0)
-        self._undertone: Optional[str] = None  # Secondary emotion bleeding through
+        self._undertone: Optional[EmotionalState] = None  # Secondary emotion bleeding through
         self._undertone_turns: int = 0         # How many turns the undertone persists
         self._mood_momentum: float = 0.0       # Positive = trending up, negative = down
 
@@ -230,11 +222,11 @@ class EmpathyEngine:
             import memory
             last = memory.get_last_emotional_state()
             if last:
-                mood = last.get("mood", "calm").lower()
-                if mood in STATES:
-                    self.current_state = STATES[mood]
-                    self.rapport = last.get("rapport", 90.0)
-                    log.info(f"Restored emotional state: {mood} | rapport: {self.rapport}")
+                mood = last.get("mood", "Calm").title()
+                # Dynamically assume it's just the default state with the given name until updated by LLM
+                self.current_state = EmotionalState(name=mood, tone_modifier="Restored state", energy=0.5, description="")
+                self.rapport = last.get("rapport", 90.0)
+                log.info(f"Restored emotional state: {mood} | rapport: {self.rapport}")
 
             # Load humor profile from knowledge graph
             humor_entries = memory.get_knowledge(category="humor_style")
@@ -297,13 +289,14 @@ class EmpathyEngine:
             "1. Sentiment Score (-1.0 to 1.0)\n"
             "2. Subtext (Hidden meaning, what they really want)\n"
             "3. Rapport Delta (-5 to +5 based on how they treat the AI)\n"
-            "4. Target State (Choose from: calm, protective, proud, witty, focused, "
-            "thoughtful, happy, stressed, tired, playful, curious, empathetic)\n"
-            "5. Intent (venting, seeking_help, casual_chat, giving_info, frustrated, "
-            "excited, seeking_validation, decision_paralysis)\n"
-            '6. Intensity (0.0 to 1.0 — how STRONGLY the user feels this emotion)\n'
+            "4. Target Emotion for LIS: Choose the MOST accurate specific emotion LIS should feel right now from the full spectrum of 280+ human emotions. Examples: Wistfulness, Fiero, Paranoia, Schadenfreude, Protective, Proud, Frustrated, Empathetic. Do not default to basic emotions if a nuanced one fits better.\n"
+            "5. Target Tone Modifier: (e.g. 'Fiercely supportive, loyal, and attentive' or 'Cold, sharp, and impatient')\n"
+            "6. Target Energy: (0.0 to 1.0)\n"
+            "7. Target Description: (1-sentence definition of this emotion)\n"
+            "8. Intensity: (0.0 to 1.0 — how STRONGLY LIS feels this right now)\n"
+            "9. Intent: (venting, seeking_help, casual_chat, giving_info, frustrated, excited, seeking_validation, decision_paralysis)\n"
             'Return ONLY valid JSON: {"sentiment": float, "subtext": "...", '
-            '"delta": int, "state": "...", "intent": "...", "intensity": float}'
+            '"delta": int, "state": "...", "tone_modifier": "...", "energy": float, "description": "...", "intent": "...", "intensity": float}'
         )
 
         if not self.client:
@@ -363,43 +356,46 @@ class EmpathyEngine:
         return default
 
 
-    def update_state(self, suggested_state: str, delta: int, intensity_hint: float = 0.0):
-        """Update LIS's internal emotional state with momentum and blending.
+    def update_state(self, sentiment_data: dict):
+        """Update LIS's internal emotional state dynamically from the LLM's output.
         
-        Instead of snapping to the new state:
-        - Same state → intensity reinforces (grows)
-        - Different state → old state becomes undertone, switch only if new is strong enough
+        - If the emotion name is the same, intensity reinforces.
+        - If different, the old emotion becomes an undertone and the new one takes over.
         """
-        suggested = suggested_state.lower() if suggested_state else "calm"
+        suggested_name = sentiment_data.get("state", "Calm").title()
+        delta = sentiment_data.get("delta", 0)
+        new_intensity = sentiment_data.get("intensity", 0.5)
+        tone = sentiment_data.get("tone_modifier", "Warm and relaxed.")
+        energy = sentiment_data.get("energy", 0.5)
+        desc = sentiment_data.get("description", "Default state.")
 
-        if suggested not in STATES:
-            suggested = "calm"
+        current_name = self.current_state.name.title()
 
-        current_name = self.current_state.name.lower()
-
-        # Calculate suggested intensity from hint or state energy default
-        new_intensity = intensity_hint if intensity_hint > 0 else STATES[suggested].energy
-
-        if suggested == current_name:
+        if suggested_name == current_name:
             # REINFORCEMENT: same state repeated → intensity grows
             self._intensity = min(1.0, self._intensity + 0.15)
         else:
             # STATE SWITCH with blending
-            # Only switch if: intensity has decayed below 0.3 OR new state is strongly signaled
             if self._intensity < 0.3 or new_intensity > self._intensity:
                 # Old state becomes the undertone
-                if current_name != "calm":  # Don't bother storing "calm" as undertone
-                    self._undertone = current_name
-                    self._undertone_turns = 3  # Fades over 3 turns
+                if current_name != "Calm":
+                    self._undertone = self.current_state
+                    self._undertone_turns = 3
 
-                self.current_state = STATES[suggested]
+                # Create the new dynamic emotional state
+                self.current_state = EmotionalState(
+                    name=suggested_name,
+                    tone_modifier=tone,
+                    energy=energy,
+                    description=desc
+                )
                 self._intensity = new_intensity
             else:
                 # New state isn't strong enough to override — just weaken current
                 self._intensity = max(0.1, self._intensity - 0.1)
-                # But still register it as an undertone if it's meaningful
-                if suggested != "calm":
-                    self._undertone = suggested
+                if suggested_name != "Calm":
+                    # Weaken current state, but inject the new one as undertone (we don't have its object, so create a temporary one)
+                    self._undertone = EmotionalState(name=suggested_name, tone_modifier=tone, energy=energy, description=desc)
                     self._undertone_turns = 2
 
         # Update rapport (clamped 0-100)
@@ -410,14 +406,14 @@ class EmpathyEngine:
             recent_trend = self._sentiment_history[-1] - self._sentiment_history[-2]
             self._mood_momentum = self._mood_momentum * 0.5 + recent_trend * 0.5
 
-        self._state_history.append((suggested, time.time()))
+        self._state_history.append((suggested_name, time.time()))
 
-        # Keep state history at reasonable size
         if len(self._state_history) > 100:
             self._state_history = self._state_history[-50:]
 
+        undertone_name = self._undertone.name if self._undertone else "none"
         log.info(f"LIS State -> {self.current_state.name} (intensity: {self._intensity:.2f}) | "
-                 f"Undertone: {self._undertone or 'none'} | Rapport: {self.rapport}")
+                 f"Undertone: {undertone_name} | Rapport: {self.rapport}")
 
     def track_sentiment(self, sentiment_score: float):
         """Track sentiment for pattern detection and proactive wellness."""
@@ -527,13 +523,11 @@ class EmpathyEngine:
             base += "barely there — keep it subtle, just a hint in your phrasing.\n"
 
         # Undertone layer
-        if self._undertone and self._undertone in STATES:
-            undertone_state = STATES[self._undertone]
+        if self._undertone:
             base += (
-                f"Undertone: {self._undertone} — this bleeds through subtly. "
-                f"({undertone_state.tone_modifier.rstrip('.')}). "
-                f"Don't state it, but let it leak: shorter sentences, less enthusiasm, "
-                f"occasional sighs, or subtle word choices that hint at it.\n"
+                f"Undertone: {self._undertone.name} — this bleeds through subtly. "
+                f"({self._undertone.tone_modifier.rstrip('.')}). "
+                f"Don't state it, but let it leak through subtle word choices or rhythm that hint at it.\n"
             )
 
         # Mood momentum
@@ -541,17 +535,20 @@ class EmpathyEngine:
             direction = "improving" if self._mood_momentum > 0 else "declining"
             base += f"Mood trend: {direction} over recent turns.\n"
 
-        # Rapport tier
+        # Rapport tier & Hinglish Scaling
         base += f"Rapport: {self.rapport}/100. "
         if self.rapport > 80:
-            base += "Deep, loving relationship. Be warm, intimate, playful."
+            base += "Deep, loving relationship. Be warm, intimate, playful. Liberally use casual Hinglish slang (yaar, arre, pagal, chalo, etc.) mid-sentence naturally."
         elif self.rapport > 50:
-            base += "Very close and affectionate. Be warm and supportive."
+            base += "Very close and affectionate. Be warm and supportive. Occasionally use polite/friendly Hinglish fillers (haan, achha, thik hai)."
         elif self.rapport > 30:
-            base += "Friendly but building trust. Be genuine and helpful."
+            base += "Friendly but building trust. Be genuine and helpful. Keep Hinglish usage light and polite."
         else:
-            base += "Formal and careful. Focus on being useful."
+            base += "Formal and careful. Focus on being useful. Stick mostly to English, limit Hindi usage to maintain a professional distance."
 
+        # Slang Contextual Fallback
+        base += "\nCRITICAL: If the user is venting, distressed, or the task is highly professional/serious, drop all casual slang and focus on the task in clean, supportive English."
+        
         # Behavioral alerts
         if self._consecutive_negative >= 2:
             base += "\nBEHAVIORAL ALERT: User has been consistently negative. Prioritize empathy and support."
@@ -563,7 +560,8 @@ class EmpathyEngine:
         if hasattr(self, '_last_signals'):
             signals = self._last_signals
         humor_ctx = self.humor.get_humor_context(
-            self.current_state.name, self._intensity, signals, self.rapport
+            self.current_state.name, self._intensity, signals, self.rapport,
+            sentiment_history=self._sentiment_history
         )
         if humor_ctx:
             base += f"\n\n{humor_ctx}"

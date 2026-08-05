@@ -25,7 +25,8 @@ class WeatherSkill(Skill):
             async with httpx.AsyncClient(timeout=8.0) as client:
                 # Use Open-Meteo geocoding for dynamic locations
                 if location != "auto":
-                    geo_resp = await client.get(f"https://geocoding-api.open-meteo.com/v1/search?name={location}&count=1")
+                    from urllib.parse import quote
+                    geo_resp = await client.get(f"https://geocoding-api.open-meteo.com/v1/search?name={quote(location)}&count=1")
                     if geo_resp.status_code == 200 and geo_resp.json().get("results"):
                         geo = geo_resp.json()["results"][0]
                         lat, lon = geo["latitude"], geo["longitude"]

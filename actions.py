@@ -78,7 +78,7 @@ async def open_browser(url: str, browser: str = "msedge") -> dict:
 
 # Keep backward compat
 async def open_chrome(url: str) -> dict:
-    return await open_browser(url, "msedge")
+    return await open_browser(url, "chrome")
 
 
 async def open_claude_in_project(project_dir: str, prompt: str) -> dict:

@@ -137,7 +137,7 @@ class LLMProviders:
                     json={
                         "model": models.GROQ_DEFAULT,
                         "messages": full_messages,
-                        "max_completion_tokens": max_tokens,
+                        "max_tokens": max_tokens,
                     },
                 )
                 if resp.status_code == 200:
@@ -215,7 +215,7 @@ class LLMProviders:
                     json={
                         "model": models.CEREBRAS_DEFAULT,
                         "messages": full_messages,
-                        "max_completion_tokens": max_tokens,
+                        "max_tokens": max_tokens,
                     },
                 )
                 if resp.status_code == 200:

@@ -94,21 +94,23 @@ async def get_access_token() -> str | None:
         log.error(f"Failed to authenticate: {result.get('error')} - {result.get('error_description')}")
         return None
 
-async def make_graph_request(method: str, endpoint: str, params: dict = None, json_data: dict = None) -> dict | None:
+async def make_graph_request(method: str, endpoint: str, params: dict = None, json_data: dict = None, headers: dict = None) -> dict | None:
     """Helper to make an authenticated request to MS Graph API."""
     token = await get_access_token()
     if not token:
         return None
         
     url = f"https://graph.microsoft.com/v1.0{endpoint}"
-    headers = {
+    req_headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json"
     }
+    if headers:
+        req_headers.update(headers)
     
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            request_kwargs = {"headers": headers}
+            request_kwargs = {"headers": req_headers}
             if params:
                 request_kwargs["params"] = params
             if json_data:

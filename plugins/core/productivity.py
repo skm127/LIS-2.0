@@ -72,7 +72,7 @@ class ManageListSkill(Skill):
     description = "Add or remove items from a persistent list (shopping, todo, etc.)."
 
     async def execute(self, list_name: str, action: str, item: str = None, **kwargs) -> SkillResult:
-        current_items = memory.get_list(list_name)
+        current_items = memory.get_list(list_name) or []
         
         if action == "add" and item:
             if item not in current_items:

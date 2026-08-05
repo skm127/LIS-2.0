@@ -180,7 +180,7 @@ class LISScheduler:
                 text = await self._build_eod_summary()
             elif routine.action == "autonomous_learning":
                 import autonomous_learner
-                autonomous_learner.trigger_learning_cycle()
+                await asyncio.to_thread(autonomous_learner.trigger_learning_cycle)
                 text = "Autonomous learning cycle triggered."
             elif routine.action.startswith("say:"):
                 text = routine.action[4:].strip()

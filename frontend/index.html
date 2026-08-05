@@ -15,7 +15,37 @@
     </script>
   </head>
   <body>
-    <canvas id="orb-canvas"></canvas>
+    <div id="orb-root" class="orb-root"></div>
+    
+    <div class="overlay-vignette"></div>
+    <div class="overlay-grain"></div>
+    <div class="overlay-scanlines"></div>
+
+    <div class="hud hud-title">L.I.S.</div>
+    <div class="hud hud-hint" id="hud-hint">
+        <div>
+          <span class="key">G</span> hand gestures&nbsp;&nbsp;
+          <span class="key">R</span> reset&nbsp;&nbsp;
+          <span class="key">+/-</span> zoom
+        </div>
+    </div>
+
+    <div class="hud hud-controls">
+        <div id="camera-panel" class="camera-panel">
+            <video id="camera-video" muted playsinline class="camera-video"></video>
+            <canvas id="camera-overlay" width="208" height="156" class="camera-overlay"></canvas>
+            <div id="camera-status" class="camera-status">SHOW HANDS</div>
+        </div>
+        <div id="hud-error" class="hud-error" style="display:none"></div>
+        <div class="hud-row">
+            <button id="btn-gestures" class="hud-btn">GESTURES OFF</button>
+        </div>
+        <div class="hud-row">
+            <button id="btn-zoom-in" class="hud-btn">+</button>
+            <button id="btn-zoom-out" class="hud-btn">-</button>
+            <button id="btn-reset" class="hud-btn">RESET</button>
+        </div>
+    </div>
 
     <!-- Minimal controls — top right -->
     <div id="controls">
@@ -41,7 +71,7 @@
     </div>
 
     <div id="status-text"></div>
-    <div id="LIS-label">LIS</div>
+
     
     <!-- Response Feedback UI -->
     <div id="feedback-ui" style="display:none; position: fixed; top: 15%; right: 5%; background: rgba(0,0,0,0.6); padding: 8px 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); backdrop-filter: blur(4px); z-index: 100;">

@@ -5,7 +5,8 @@
  * speech recognition, and audio playback into a single experience.
  */
 
-import { createOrb, type OrbState } from "./orb";
+import { createOrbScene, type OrbSceneApi } from "./orbScene";
+import { HandTracker } from "./handTracker";
 import { createVoiceInput, createAudioPlayer } from "./voice";
 import { createSocket } from "./ws";
 import { openSettings, checkFirstTimeSetup } from "./settings";
@@ -44,8 +45,75 @@ function updateStatus(state: State) {
 // Init components
 // ---------------------------------------------------------------------------
 
-const canvas = document.getElementById("orb-canvas") as HTMLCanvasElement;
-const orb = createOrb(canvas);
+const orbRoot = document.getElementById("orb-root") as HTMLDivElement;
+const orb = createOrbScene(orbRoot);
+
+// ---------------------------------------------------------------------------
+// UI & Hand Tracker Setup
+// ---------------------------------------------------------------------------
+const videoEl = document.getElementById("camera-video") as HTMLVideoElement;
+const overlayEl = document.getElementById("camera-overlay") as HTMLCanvasElement;
+const btnGestures = document.getElementById("btn-gestures") as HTMLButtonElement;
+const cameraStatusEl = document.getElementById("camera-status") as HTMLDivElement;
+const hudErrorEl = document.getElementById("hud-error") as HTMLDivElement;
+const cameraPanel = document.getElementById("camera-panel");
+
+let tracker: HandTracker | null = null;
+let gesturesOn = false;
+
+async function toggleGestures() {
+  if (gesturesOn && tracker) {
+    tracker.stop();
+    tracker = null;
+    gesturesOn = false;
+    btnGestures.textContent = "GESTURES OFF";
+    cameraPanel?.classList.remove("visible");
+    cameraStatusEl.textContent = "SHOW HANDS";
+  } else {
+    btnGestures.textContent = "INITIALIZING...";
+    btnGestures.disabled = true;
+    hudErrorEl.style.display = "none";
+    
+    tracker = new HandTracker(videoEl, overlayEl, {
+      onRotate: (dt, dp) => orb.rotateBy(dt, dp),
+      onZoom: (factor) => orb.zoomBy(factor),
+      onStatus: (status) => {
+        if (status.hands > 0) {
+          cameraStatusEl.textContent = `${status.hands} HAND${status.hands > 1 ? "S" : ""} · ${status.mode.toUpperCase()}`;
+        } else {
+          cameraStatusEl.textContent = "SHOW HANDS";
+        }
+      }
+    });
+
+    try {
+      await tracker.start();
+      gesturesOn = true;
+      btnGestures.textContent = "GESTURES ON";
+      cameraPanel?.classList.add("visible");
+    } catch (e: any) {
+      tracker = null;
+      btnGestures.textContent = "GESTURES OFF";
+      hudErrorEl.textContent = e.name === "NotAllowedError" ? "CAMERA ACCESS DENIED" : "TRACKING INIT FAILED";
+      hudErrorEl.style.display = "block";
+    }
+    btnGestures.disabled = false;
+  }
+}
+
+btnGestures?.addEventListener("click", toggleGestures);
+document.getElementById("btn-zoom-in")?.addEventListener("click", () => orb.zoomIn());
+document.getElementById("btn-zoom-out")?.addEventListener("click", () => orb.zoomOut());
+document.getElementById("btn-reset")?.addEventListener("click", () => orb.resetView());
+
+window.addEventListener("keydown", (e) => {
+  // Only trigger hotkeys if not typing in input
+  if (document.activeElement?.tagName === "INPUT") return;
+  if (e.key === "+" || e.key === "=") orb.zoomIn();
+  if (e.key === "-" || e.key === "_") orb.zoomOut();
+  if (e.key.toLowerCase() === "r") orb.resetView();
+  if (e.key.toLowerCase() === "g") toggleGestures();
+});
 
 const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
 const WS_URL = `${wsProto}//${window.location.host}/ws/voice`;
@@ -57,7 +125,7 @@ orb.setAnalyser(audioPlayer.getAnalyser());
 function transition(newState: State) {
   if (newState === currentState) return;
   currentState = newState;
-  orb.setState(newState as OrbState);
+  orb.updateState(newState);
   updateStatus(newState);
 
   switch (newState) {
@@ -84,6 +152,7 @@ const voiceInput = createVoiceInput(
   (text: string) => {
     // Cancel any current LIS response before sending new input
     audioPlayer.stop();
+    addChatMessage("user", text);
     // User spoke — send transcript
     socket.send({ type: "transcript", text, isFinal: true });
     transition("thinking");
@@ -433,33 +502,6 @@ function escapeHtml(text: string): string {
   div.textContent = text;
   return div.innerHTML;
 }
-
-// --- Wire chat panel to existing voice pipeline ---
-
-// Patch the voice input callback to also add user messages to chat
-const originalVoiceCallback = (text: string) => {
-  audioPlayer.stop();
-  addChatMessage("user", text);
-  socket.send({ type: "transcript", text, isFinal: true });
-  transition("thinking");
-};
-
-// Re-create voice input with chat-aware callback
-const voiceInputWithChat = createVoiceInput(
-  originalVoiceCallback,
-  (msg: string) => { showError(msg); },
-  () => {
-    if (currentState === "speaking") {
-      console.log("[barge-in] User interrupted LIS");
-      audioPlayer.stop();
-      transition("idle");
-      socket.send({ type: "abort_audio" });
-    }
-  }
-);
-
-// Override voiceInput methods to use the chat-aware version
-// (voice input was already started, so we just need the message hook)
 
 // Extend socket.onMessage to capture chat messages
 socket.onMessage((msg) => {

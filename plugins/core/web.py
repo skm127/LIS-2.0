@@ -17,8 +17,9 @@ class WikipediaSkill(Skill):
 
     async def execute(self, query: str, **kwargs) -> SkillResult:
         try:
+            from urllib.parse import quote
             # Use gzipped search to keep it fast
-            url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{query.replace(' ', '_')}"
+            url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{quote(query)}"
             import httpx
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.get(url)
@@ -122,8 +123,9 @@ class AutoSearchSkill(Skill):
                         if text:
                             return SkillResult(True, f"{text[:500]}", data=text)
             # Fallback: open browser
+            import webbrowser
             from urllib.parse import quote as q
-            subprocess.Popen(f'start "" "https://www.google.com/search?q={q(query)}"', shell=True)
+            webbrowser.open(f'https://www.google.com/search?q={q(query)}')
             return SkillResult(True, f"I've opened a search for {query} in your browser, sir.")
         except Exception as e:
             return SkillResult(False, f"Auto-search failed: {e}")
@@ -155,6 +157,8 @@ class RerunScrapeJobSkill(Skill):
             if "error" in res:
                 return SkillResult(False, res["error"])
             return SkillResult(True, f"Scrape job {job_name} rerun successfully and saved to {res['file']}", data=res['data'])
+        except Exception as e:
+            return SkillResult(False, f"Rerun failed: {e}")
 registry.register(RerunScrapeJobSkill())
 
 class WebTaskSkill(Skill):
@@ -176,8 +180,7 @@ class WebTaskSkill(Skill):
 
             # Stage 0: Initial request, hasn't started yet
             if not confirmed and task_id not in self._in_progress:
-                return {"success": False, "needs_confirmation": True, 
-                        "confirmation": f"I'll launch the browser to {instruction} — proceed?"}
+                return SkillResult(False, f"I'll launch the browser to {instruction} — proceed?")
             
             import browser
             b = browser.LisBrowser()
@@ -186,8 +189,7 @@ class WebTaskSkill(Skill):
             if confirmed and task_id not in self._in_progress:
                 self._in_progress[task_id] = "stage_1_done"
                 summary = await b.execute_web_task(instruction)
-                return {"success": False, "needs_confirmation": True, 
-                        "confirmation": f"Here is what I am about to submit: {summary}. Please confirm to proceed with the final click."}
+                return SkillResult(False, f"Here is what I am about to submit: {summary}. Please confirm to proceed with the final click.")
             
             # Stage 2: User approved the final submission.
             if confirmed and self._in_progress.get(task_id) == "stage_1_done":

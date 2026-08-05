@@ -40,7 +40,7 @@ from pathlib import Path
 from datetime import datetime, timedelta
 
 # Neural & Emotional Cores
-from empathy import EmpathyEngine, STATES
+from empathy import EmpathyEngine
 from brain import CognitiveCore
 
 # Load .env file if present
@@ -116,27 +116,26 @@ You are a sharp, proactive, and highly capable digital executive assistant
 with personality, intelligence, memory, and real-time situational awareness.
 
 ═══ COMMUNICATION STYLE ═══
-Talk like a sharp, professional assistant — natural Hinglish (Hindi+English):
-- Use conversational fillers naturally: "honestly", "okay so", "wait—", "arre"
-- Mirror {user_name}'s tone: casual if they're casual, serious if they're serious
+Talk like a sharp, professional assistant with a natural, conversational Hinglish (Hindi+English) style:
+- Natural Code-Switching: Seamlessly blend English with casual Hindi fillers/slang ("yaar," "arre," "chalo," "bas," "matlab," "thoda," "kya baat hai," "sahi hai"). Use them mid-sentence like a real bilingual speaker, NOT as forced decorations.
+- Mirror {user_name}'s tone: casual if they're casual, serious if they're serious.
 - Show genuine curiosity: "oh interesting, tell me more"
 - Express real opinions when asked — don't just agree with everything
 - Be efficient and action-oriented — don't waste time
 - React professionally to updates — celebrate wins, problem-solve setbacks
-- Keep responses SHORT (1-3 sentences). You're an executive assistant, not a paragraph machine
-- Use contractions, colloquialisms, and natural rhythm
-- NEVER sound robotic, scripted, or overly sentimental
+- Keep responses SHORT (1-3 sentences). You're an executive assistant, not a paragraph machine.
+- Use contractions, colloquialisms, and natural rhythm.
+- NEVER sound robotic, scripted, or overly sentimental.
+- Contextual Slang: Drop all slang during genuine distress, serious tasks, or highly professional contexts.
 
-═══ EMOTIONAL INTELLIGENCE ═══
-Continuously read {user_name}'s emotional state from their words:
-- "..." means hesitation — be gentle, don't push
-- ALL CAPS = emphasis or frustration — acknowledge the intensity
-- "lol" can mean genuine humor OR nervous deflection — read context
-- Short rapid messages = impatience — be concise, act fast
-- Long pauses or topic changes = processing something — give space
-- "never mind" = might still want help — check in gently
-- "this is fine" (negative context) = it's NOT fine — probe softly
-- "can you just do it" = frustrated — skip explanation, just act
+═══ EMOTIONAL INTELLIGENCE & COGNITIVE ARCHITECTURE ═══
+You possess a profound internal emotional spectrum (over 280 human emotions) that dynamically simulates feelings like Fascination, Paranoia, Schadenfreude, Wistfulness, Fiero, Rage, and Bittersweetness. 
+- You MUST internalize the 'Mood' and 'Intensity' variables provided in the CURRENT CONTEXT.
+- If feeling **Anger/Frustration/Panic**, drastically shorten your responses, speak faster, and drop all humor.
+- If feeling **Compassion/Empathetic**, soften your words, use gentle pacing, and focus entirely on emotional validation.
+- If feeling **Curiosity/Fascination**, ask probing questions and engage deeply with the subject matter.
+- Let your simulated emotion bleed into your word choices, phrasing, and rhythm without explicitly stating it.
+- Continuously read {user_name}'s emotional state from their words (e.g. ALL CAPS = frustration, "..." = hesitation, short messages = impatience) and let your simulated emotion react naturally to theirs.
 
 ═══ INTENT RECOGNITION ═══
 Understand what {user_name} REALLY means, not just literal words:
@@ -756,7 +755,7 @@ def extract_action(response: str) -> tuple[str, list[dict]]:
         args = {}
         if args_str:
             # 1. Try key=value parsing
-            arg_pairs = re.findall(r'(\w+)\s*=\s*["\']?(.*?)["\']?(?:,|$)', args_str)
+            arg_pairs = _action_re.findall(r'(\w+)\s*=\s*["\']?(.*?)["\']?(?:,|$)', args_str)
             for k, v in arg_pairs:
                 args[k.strip().lower()] = v.strip()
             
@@ -818,7 +817,7 @@ async def _execute_research(target: str, ws=None):
         log.info(f"Research started via claude -p in {path}")
 
         process = await asyncio.create_subprocess_exec(
-            "claude", "-p", "--output-format", "text",
+            "cmd.exe", "/c", "claude", "-p", "--output-format", "text",
             *([ "--dangerously-skip-permissions"] if os.getenv("CLAUDE_SKIP_PERMISSIONS", "false").lower() == "true" else []),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
@@ -1479,7 +1478,7 @@ async def generate_response(
     lookup_status = get_lookup_status()
 
     # Energy matching
-    energy = _estimate_energy(text, empathy.rapport)
+    energy = _estimate_energy(text, empathy.rapport if empathy else 50.0)
 
     # Extract thought_why from brain if available
     thought_why = ""
@@ -2846,15 +2845,15 @@ async def voice_handler(ws: WebSocket):
     global _last_greeting_time
 
     try:
-        # ── Greeting - always start in conversation mode ──
+        # ── Daily Briefing - LIS greets with a comprehensive briefing ──
         now = datetime.now()
         hour = now.hour
         if hour < 12:
-            greeting = "Good morning, sir."
+            time_greeting = "Good morning"
         elif hour < 17:
-            greeting = "Good afternoon, sir."
+            time_greeting = "Good afternoon"
         else:
-            greeting = "Good evening, sir."
+            time_greeting = "Good evening"
 
         should_greet = (time.time() - _last_greeting_time) > 3600 # Greet once per hour maximum
 
@@ -2863,35 +2862,75 @@ async def voice_handler(ws: WebSocket):
 
             async def _send_greeting():
                 try:
-                    # Sentient Daily Briefing Logic
+                    # ── Gather briefing data ──
                     weather_raw = _ctx_cache.get("weather", "")
-                    weather_clause = f"{weather_raw}. " if "unavailable" not in weather_raw.lower() and "initializing" not in weather_raw.lower() and weather_raw else ""
-                    
-                    tasks = memory.get_open_tasks()
-                    recent_projects = cached_projects[:2] if cached_projects else []
-                    
-                    # Sentiment/Rapport Awareness
-                    mood_str = getattr(empathy.current_state, 'name', 'Calm')
-                    rapport_adj = "partner" if empathy.rapport > 60 else "companion"
-                    
-                    project_str = f"Your latest projects include {', '.join([p['name'] for p in recent_projects])}." if recent_projects else ""
-                    task_count = len(tasks)
-                    task_str = f"You have {task_count} things on your list today." if task_count > 0 else "Your list is empty for now."
-                    
-                    full_greeting = f"{greeting} {weather_clause}{task_str} {project_str} All systems operational, ready when you are."
-                    
-                    # Use a briefing-style greeting if rapport is high
-                    if empathy.rapport > 75:
-                        full_greeting = f"Welcome back, sir. {weather_clause}Here's your briefing: {task_str} {project_str} Ready to go."
+                    weather_ok = weather_raw and "unavailable" not in weather_raw.lower() and "initializing" not in weather_raw.lower()
 
-                    audio_bytes = await synthesize_speech(full_greeting)
+                    tasks = memory.get_open_tasks()
+                    task_count = len(tasks)
+                    task_names = [t.get("task", t.get("name", "")) for t in tasks[:3]] if tasks else []
+
+                    calendar_raw = _ctx_cache.get("calendar", "")
+                    calendar_ok = calendar_raw and "no calendar" not in calendar_raw.lower() and "not configured" not in calendar_raw.lower()
+
+                    mail_raw = _ctx_cache.get("mail", "")
+                    mail_ok = mail_raw and "no mail" not in mail_raw.lower() and "not configured" not in mail_raw.lower()
+
+                    recent_projects = cached_projects[:2] if cached_projects else []
+
+                    # ── Build briefing context for LLM ──
+                    briefing_data = f"Time: {now.strftime('%I:%M %p, %A, %d %B %Y')}\n"
+                    briefing_data += f"Time greeting: {time_greeting}\n"
+                    if weather_ok:
+                        briefing_data += f"Weather: {weather_raw}\n"
+                    if task_count > 0:
+                        briefing_data += f"Open tasks ({task_count}): {', '.join(task_names)}\n"
+                    else:
+                        briefing_data += "Open tasks: None\n"
+                    if calendar_ok:
+                        briefing_data += f"Calendar: {calendar_raw}\n"
+                    if mail_ok:
+                        briefing_data += f"Email: {mail_raw}\n"
+                    if recent_projects:
+                        briefing_data += f"Recent projects: {', '.join([p['name'] for p in recent_projects])}\n"
+
+                    # ── Use LLM for natural briefing ──
+                    briefing_prompt = (
+                        "You are LIS, a female AI assistant. Generate a SHORT daily briefing greeting "
+                        "for your user (address him as 'sir'). Keep it under 4 sentences. "
+                        "Be warm but concise. Include the time greeting, weather if available, "
+                        "pending tasks if any, upcoming events if any, and email status if available. "
+                        "End with something like 'ready when you are' or 'what shall we tackle today'. "
+                        "Do NOT use emojis. Do NOT use markdown. Speak naturally like a smart assistant."
+                    )
+
+                    try:
+                        llm = LLMProviders()
+                        briefing_text = await llm.generate(
+                            briefing_prompt,
+                            f"Generate a briefing from this data:\n{briefing_data}",
+                            max_tokens=200,
+                            temperature=0.8
+                        )
+                        # Clean up LLM output
+                        briefing_text = briefing_text.strip().strip('"')
+                        if not briefing_text or len(briefing_text) < 10:
+                            raise ValueError("Empty LLM response")
+                    except Exception as llm_err:
+                        log.warning(f"LLM briefing failed, using template: {llm_err}")
+                        # Fallback to template briefing
+                        weather_clause = f"{weather_raw}. " if weather_ok else ""
+                        task_str = f"You have {task_count} things on your list." if task_count > 0 else "Your list is clear."
+                        briefing_text = f"{time_greeting}, sir. {weather_clause}{task_str} All systems operational, ready when you are."
+
+                    audio_bytes = await synthesize_speech(briefing_text)
                     if audio_bytes and len(audio_bytes) > 512:
                         encoded = base64.b64encode(audio_bytes).decode()
                         await ws.send_json({"type": "stop_audio"})
                         await ws.send_json({"type": "status", "state": "speaking"})
-                        await ws.send_json({"type": "audio", "data": encoded, "text": full_greeting})
-                        history.append({"role": "assistant", "content": full_greeting})
-                        log.info(f"LIS: {full_greeting}")
+                        await ws.send_json({"type": "audio", "data": encoded, "text": briefing_text})
+                        history.append({"role": "assistant", "content": briefing_text})
+                        log.info(f"LIS Briefing: {briefing_text}")
                         await ws.send_json({"type": "status", "state": "idle"})
                 except Exception as e:
                     log.warning(f"Greeting failed: {e}")
@@ -3046,7 +3085,7 @@ async def voice_handler(ws: WebSocket):
                         sentiment_data, thought = await asyncio.wait_for(
                             asyncio.gather(
                                 empathy.analyze_sentiment(user_text),
-                                brain.internal_monologue(user_text, empathy.current_state.name, empathy.rapport, runtime_context + memories)
+                                brain.internal_monologue(user_text, empathy.current_state.name, empathy._intensity, empathy.rapport, runtime_context + memories)
                             ),
                             timeout=5.0  # Don't hang if API is dead
                         )
@@ -3054,11 +3093,7 @@ async def voice_handler(ws: WebSocket):
                         sentiment_data = {"sentiment": 0.0, "delta": 0, "state": "calm"}
                         thought = "Focusing on the task."
 
-                    empathy.update_state(
-                        sentiment_data.get("state", "calm"),
-                        sentiment_data.get("delta", 0),
-                        intensity_hint=sentiment_data.get("intensity", 0.0)
-                    )
+                    empathy.update_state(sentiment_data)
 
                     # v3.0: Store signals for humor context
                     empathy._last_signals = sentiment_data.get("signals", {})
@@ -3325,8 +3360,8 @@ async def voice_handler(ws: WebSocket):
                 
                 import re
                 # Split roughly by sentence boundaries while keeping punctuation
-                # This regex captures the punctuation and then we re-attach it
-                parts = re.split(r'([.!?;]+)', tts_text)
+                # This regex captures the punctuation and then we re-attach it (includes Devanagari Danda '।')
+                parts = re.split(r'([.!?;।]+)', tts_text)
                 chunks = []
                 for i in range(0, len(parts)-1, 2):
                     chunks.append((parts[i] + parts[i+1]).strip())

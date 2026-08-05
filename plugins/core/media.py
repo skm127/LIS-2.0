@@ -66,7 +66,7 @@ class MediaControlSkill(Skill):
         
         try:
             # Use PowerShell to send virtual key
-            ps_cmd = f"$wshell = New-Object -ComObject WScript.Shell; $wshell.SendKeys([char]{vk})"
+            ps_cmd = f'Add-Type -TypeDefinition @"\nusing System;using System.Runtime.InteropServices;\npublic class KBD{{[DllImport("user32.dll")]public static extern void keybd_event(byte bVk,byte bScan,uint dwFlags,UIntPtr dwExtraInfo);}}\n"@; [KBD]::keybd_event({vk},0,0,[UIntPtr]::Zero); [KBD]::keybd_event({vk},0,2,[UIntPtr]::Zero)'
             subprocess.Popen(["powershell", "-Command", ps_cmd], shell=True)
             return SkillResult(True, f"Media {action} executed, sir.")
         except Exception as e:

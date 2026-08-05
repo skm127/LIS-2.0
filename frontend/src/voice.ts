@@ -29,7 +29,9 @@ export function createVoiceInput(
   }
 
   const recognition = new SR();
-  recognition.continuous = true;
+  // Using continuous=false forces the browser's native Voice Activity Detection (VAD)
+  // to cleanly end the transcript when the user stops speaking.
+  recognition.continuous = false;
   recognition.interimResults = true;
   recognition.lang = "en-US"; // Reverted to en-US for maximum Edge compatibility
 
@@ -43,17 +45,20 @@ export function createVoiceInput(
 
   recognition.onresult = (event: any) => {
     let hasSpeech = false;
+    let finalTranscript = "";
+
     for (let i = event.resultIndex; i < event.results.length; i++) {
       const transcript = event.results[i][0].transcript;
       if (transcript.trim().length > 0) hasSpeech = true;
       
       if (event.results[i].isFinal) {
-        console.log("[mic] FINAL:", transcript);
-        const text = transcript.trim();
-        if (text) onTranscript(text);
-      } else {
-        console.log("[mic] interim:", transcript);
+        finalTranscript += transcript;
       }
+    }
+    
+    if (finalTranscript.trim().length > 0) {
+      console.log("[mic] FINAL:", finalTranscript);
+      onTranscript(finalTranscript.trim());
     }
     
     if (hasSpeech && onInterruption) {

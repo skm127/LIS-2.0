@@ -125,7 +125,7 @@ class LaunchAppSkill(Skill):
             try:
                 subprocess.Popen(f'start "" "{app_name}"', shell=True)
                 return SkillResult(True, f"Trying to open {app_name} for you!")
-            except:
+            except Exception:
                 return SkillResult(False, "Couldn't find any installed applications.")
 
         # Check aliases
@@ -153,7 +153,7 @@ class LaunchAppSkill(Skill):
         try:
             subprocess.Popen(f'start "" "{app_name}"', shell=True)
             return SkillResult(True, f"Trying to open {app_name}!")
-        except:
+        except Exception:
             return SkillResult(False, f"Couldn't find {app_name}.")
 registry.register(LaunchAppSkill())
 

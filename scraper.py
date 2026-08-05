@@ -7,7 +7,7 @@ from datetime import datetime
 from browser import LisBrowser
 from llm_providers import LLMProviders
 
-DB_PATH = Path(__file__).parent / "data" / "lis_data.db"
+DB_PATH = Path(__file__).parent / "data" / "lis.db"
 OUTPUT_DIR = Path.home() / "Desktop" / "LIS_Scrapes"
 
 def init_db():
@@ -26,38 +26,41 @@ def init_db():
 
 async def extract_structured(url: str, field_schema: dict) -> dict:
     browser = LisBrowser()
-    page_content = await browser.visit(url)
-    text_content = page_content.text_content
-    
-    providers = LLMProviders()
-    system_prompt = "You are a data extraction assistant. Extract information from the provided text according to the following JSON schema. Output ONLY valid JSON, no markdown formatting."
-    
-    messages = [
-        {"role": "user", "content": f"Schema: {json.dumps(field_schema)}\n\nText: {text_content}"}
-    ]
-    
-    result_text = await providers.generate(
-        messages=messages,
-        system=system_prompt,
-        max_tokens=2000
-    )
-    
-    if not result_text:
-        return {"error": "LLM generation failed"}
-        
-    # Clean up output in case LLM added markdown code blocks
-    result_text = result_text.strip()
-    if result_text.startswith("```json"):
-        result_text = result_text[7:]
-    elif result_text.startswith("```"):
-        result_text = result_text[3:]
-    if result_text.endswith("```"):
-        result_text = result_text[:-3]
-        
     try:
-        return json.loads(result_text.strip())
-    except json.JSONDecodeError:
-        return {"error": "Failed to parse LLM output as JSON", "raw": result_text}
+        page_content = await browser.visit(url)
+        text_content = page_content.text_content
+        
+        providers = LLMProviders()
+        system_prompt = "You are a data extraction assistant. Extract information from the provided text according to the following JSON schema. Output ONLY valid JSON, no markdown formatting."
+        
+        messages = [
+            {"role": "user", "content": f"Schema: {json.dumps(field_schema)}\n\nText: {text_content}"}
+        ]
+        
+        result_text = await providers.generate(
+            messages=messages,
+            system=system_prompt,
+            max_tokens=2000
+        )
+        
+        if not result_text:
+            return {"error": "LLM generation failed"}
+            
+        # Clean up output in case LLM added markdown code blocks
+        result_text = result_text.strip()
+        if result_text.startswith("```json"):
+            result_text = result_text[7:]
+        elif result_text.startswith("```"):
+            result_text = result_text[3:]
+        if result_text.endswith("```"):
+            result_text = result_text[:-3]
+            
+        try:
+            return json.loads(result_text.strip())
+        except json.JSONDecodeError:
+            return {"error": "Failed to parse LLM output as JSON", "raw": result_text}
+    finally:
+        await browser.close()
 
 def save_job(name: str, url: str, schema: dict):
     init_db()

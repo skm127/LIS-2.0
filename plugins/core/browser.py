@@ -18,19 +18,13 @@ class BrowseEdgeSkill(Skill):
     async def execute(self, query_or_url: str, **kwargs) -> SkillResult:
         try:
             import urllib.parse
-            import asyncio
+            import webbrowser
             if query_or_url.startswith("http"):
                 url = query_or_url
             else:
                 url = f"https://www.google.com/search?q={urllib.parse.quote(query_or_url)}"
             
-            cmd = f'start msedge "{url}"'
-            proc = await asyncio.create_subprocess_shell(
-                cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            await proc.communicate()
+            subprocess.Popen(f'start msedge "{url}"', shell=True)
             return SkillResult(True, f"Opened Edge for: {query_or_url}")
         except Exception as e:
             return SkillResult(False, f"Failed to open Edge: {e}")
@@ -43,21 +37,15 @@ class SendEmailSkill(Skill):
     async def execute(self, to: str = "", subject: str = "", body: str = "", **kwargs) -> SkillResult:
         try:
             import urllib.parse
-            import asyncio
+            import webbrowser
             
             url = f"https://mail.google.com/mail/?view=cm&fs=1"
             if to: url += f"&to={urllib.parse.quote(to)}"
             if subject: url += f"&su={urllib.parse.quote(subject)}"
             if body: url += f"&body={urllib.parse.quote(body)}"
             
-            cmd = f'start msedge "{url}"'
-            proc = await asyncio.create_subprocess_shell(
-                cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            await proc.communicate()
-            return SkillResult(True, "Opened Gmail compose window in Edge.")
+            webbrowser.open(url)
+            return SkillResult(True, "Opened Gmail compose window in browser.")
         except Exception as e:
             return SkillResult(False, f"Failed to open Email: {e}")
 registry.register(SendEmailSkill())
@@ -69,7 +57,7 @@ class WhatsAppSkill(Skill):
     async def execute(self, phone: str = "", message: str = "", **kwargs) -> SkillResult:
         try:
             import urllib.parse
-            import asyncio
+            import webbrowser
             
             url = "https://web.whatsapp.com/send?"
             if phone:
@@ -78,14 +66,8 @@ class WhatsAppSkill(Skill):
             if message:
                 url += f"text={urllib.parse.quote(message)}"
             
-            cmd = f'start msedge "{url}"'
-            proc = await asyncio.create_subprocess_shell(
-                cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            await proc.communicate()
-            return SkillResult(True, "Opened WhatsApp Web in Edge.")
+            webbrowser.open(url)
+            return SkillResult(True, "Opened WhatsApp Web in browser.")
         except Exception as e:
             return SkillResult(False, f"Failed to open WhatsApp: {e}")
 registry.register(WhatsAppSkill())

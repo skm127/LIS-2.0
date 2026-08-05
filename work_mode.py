@@ -81,7 +81,7 @@ class WorkSession:
             return CLI_DEAD_SENTINEL
 
         cmd = [
-            claude_path, "-p",
+            claude_path, "-p", user_text,
             "--output-format", "text",
         ]
         if os.getenv("CLAUDE_SKIP_PERMISSIONS", "false").lower() == "true":
@@ -99,14 +99,13 @@ class WorkSession:
         try:
             process = await asyncio.create_subprocess_exec(
                 *cmd,
-                stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=self._working_dir,
             )
 
             stdout, stderr = await asyncio.wait_for(
-                process.communicate(input=user_text.encode()),
+                process.communicate(),
                 timeout=300,
             )
 
