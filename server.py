@@ -1825,8 +1825,24 @@ async def lifespan(application: FastAPI):
     global anthropic_client, cached_projects
     if ANTHROPIC_API_KEY:
         anthropic_client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+        # ── Validate API key at startup — don't waste time on dead keys ──
+        try:
+            test_resp = await anthropic_client.messages.create(
+                model=models.HAIKU,
+                max_tokens=5,
+                messages=[{"role": "user", "content": "hi"}],
+            )
+            log.info("Anthropic API key validated successfully.")
+        except Exception as e:
+            err_str = str(e).lower()
+            if "401" in err_str or "authentication" in err_str or "balance" in err_str or "403" in err_str:
+                log.warning(f"Anthropic API key is INVALID — marking dead. Will use free providers. ({e})")
+                API_DEAD["anthropic"] = True
+                anthropic_client = None
+            else:
+                log.warning(f"Anthropic API check failed (network?), will retry on demand: {e}")
     else:
-        log.warning("ANTHROPIC_API_KEY not set - LLM features disabled")
+        log.warning("ANTHROPIC_API_KEY not set - using free LLM providers")
     cached_projects = []
 
     # Start context refresh in a separate thread (never touches event loop)
@@ -2905,12 +2921,12 @@ async def voice_handler(ws: WebSocket):
                     )
 
                     try:
-                        llm = LLMProviders()
-                        briefing_text = await llm.generate(
-                            briefing_prompt,
-                            f"Generate a briefing from this data:\n{briefing_data}",
+                        briefing_text = await generate_text(
+                            client=anthropic_client,
+                            model=models.HAIKU,
                             max_tokens=200,
-                            temperature=0.8
+                            system=briefing_prompt,
+                            messages=[{"role": "user", "content": f"Generate a briefing from this data:\n{briefing_data}"}],
                         )
                         # Clean up LLM output
                         briefing_text = briefing_text.strip().strip('"')

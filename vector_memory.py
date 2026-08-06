@@ -64,6 +64,25 @@ class VectorMemory:
                 name="lis_memory",
                 metadata={"hnsw:space": "cosine"},
             )
+
+            # ── Dimension mismatch guard ──
+            # If the embedding provider changed (e.g., local 384 → NVIDIA 1024),
+            # the old collection will reject new vectors. Detect and fix this.
+            if self._collection.count() > 0:
+                try:
+                    test_embed = self._embed("dimension test")
+                    if test_embed:
+                        # Try a dummy query to see if dimensions match
+                        self._collection.query(query_embeddings=[test_embed], n_results=1)
+                except Exception as dim_err:
+                    if "dimension" in str(dim_err).lower():
+                        log.warning(f"Embedding dimension changed. Recreating vector store. Old data will be lost.")
+                        self._client.delete_collection("lis_memory")
+                        self._collection = self._client.get_or_create_collection(
+                            name="lis_memory",
+                            metadata={"hnsw:space": "cosine"},
+                        )
+
             log.info(f"VectorMemory initialized. {self._collection.count()} vectors stored.")
             return True
         except ImportError as e:
