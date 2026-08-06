@@ -1362,16 +1362,16 @@ async def generate_text_nvidia(messages: list[dict], system_prompt: str = "") ->
 def _build_fallback_chain():
     """Build the ordered list of fallback providers.
 
-    Order: Groq → Gemini → Cerebras → OpenRouter → NVIDIA → Ollama
+    Order: NVIDIA → Groq → Gemini → Cerebras → OpenRouter → Ollama
     Each provider is tried in sequence. If ALL fail, a hardcoded
     response keeps LIS alive so she is NEVER truly down.
     """
     chain = []
+    chain.append(("NVIDIA", generate_text_nvidia))
     chain.append(("Groq", generate_text_groq))
     chain.append(("Gemini", generate_text_gemini))
     chain.append(("Cerebras", generate_text_cerebras))
     chain.append(("OpenRouter", generate_text_openrouter))
-    chain.append(("NVIDIA", generate_text_nvidia))
     chain.append(("Ollama", generate_text_ollama))
     return chain
 
@@ -1385,7 +1385,7 @@ async def generate_text(
 ) -> str:
     """Wrapper for LLM calls with 7-provider fallback chain.
 
-    Chain: Anthropic → Groq → Gemini → Cerebras → OpenRouter → NVIDIA → Ollama
+    Chain: Anthropic → NVIDIA → Groq → Gemini → Cerebras → OpenRouter → Ollama
     LIS is NEVER truly down — always has a response.
     """
     # INSTANT SKIP: If Anthropic is dead, jump straight to fallback chain

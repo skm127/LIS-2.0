@@ -1,11 +1,9 @@
 """
 LIS LLM Provider Manager — Unified multi-provider fallback chain.
-
-Consolidates all LLM provider logic into a single module with:
-- 6-provider cascade: Anthropic → Groq → Gemini → Cerebras → OpenRouter → Ollama
-- Circuit-breaker pattern (API_DEAD flags)
-- Unified `generate()` interface
-- Usage tracking hooks
+Features:
+- Usage tracking (tokens & cost) per provider
+- 7-provider cascade: Anthropic → NVIDIA → Groq → Gemini → Cerebras → OpenRouter → Ollama
+- Circuit breaker state (temporarily marks dead APIs to avoid 1s+ timeouts on every turn)
 
 Usage:
     from llm_providers import LLMProviders
@@ -356,16 +354,10 @@ class LLMProviders:
     # ═══════════════════════════════════════════════════════════════════
 
     async def generate(
-        self,
-        messages: list[dict],
-        system: str = "",
-        max_tokens: int = 1000,
-        model: str = models.HAIKU,
-        prefer_provider: Optional[str] = None,
-    ) -> str:
-        """Generate text with 6-provider fallback chain.
-
-        Chain: Anthropic → Groq → Gemini → Cerebras → OpenRouter → Ollama
+        self, messages: list[dict], system: str = "", max_tokens: int = 1000, model: str = models.CLAUDE_DEFAULT, prefer_provider: str = None
+    ) -> Optional[str]:
+        """Generate text with 7-provider fallback chain.
+        Chain: Anthropic → NVIDIA → Groq → Gemini → Cerebras → OpenRouter → Ollama
         LIS is NEVER truly down — always has a response.
         
         Args:
@@ -402,11 +394,11 @@ class LLMProviders:
 
         # Cascading free fallback chain
         chain = [
+            ("NVIDIA", self._generate_nvidia),
             ("Groq", self._generate_groq),
             ("Gemini", self._generate_gemini),
             ("Cerebras", self._generate_cerebras),
             ("OpenRouter", self._generate_openrouter),
-            ("NVIDIA", self._generate_nvidia),
             ("Ollama", self._generate_ollama),
         ]
 
