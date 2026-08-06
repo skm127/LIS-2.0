@@ -52,9 +52,11 @@ async def test_fallback_success_midway(providers):
                 return self._json
                 
         def mock_post_side_effect(*args, **kwargs):
-            if "groq.com" in args[0]:
+            if "nvidia" in args[0].lower():
+                raise Exception("Nvidia down")
+            elif "groq.com" in args[0].lower():
                 raise Exception("Groq down")
-            elif "generativelanguage.googleapis.com" in args[0]:
+            elif "generativelanguage.googleapis.com" in args[0].lower():
                 return FakeResponse({
                     "candidates": [{"content": {"parts": [{"text": "Hello from Gemini"}]}}]
                 })
@@ -67,5 +69,5 @@ async def test_fallback_success_midway(providers):
         
         assert result == "Hello from Gemini"
         
-        # It should have called Anthropic, Groq, and Gemini, then stopped.
-        assert mock_post.call_count == 2
+        # It should have called Anthropic (mocked out), then NVIDIA, Groq, and Gemini, then stopped.
+        assert mock_post.call_count == 3

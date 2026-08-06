@@ -354,7 +354,7 @@ class LLMProviders:
     # ═══════════════════════════════════════════════════════════════════
 
     async def generate(
-        self, messages: list[dict], system: str = "", max_tokens: int = 1000, model: str = models.CLAUDE_DEFAULT, prefer_provider: str = None
+        self, messages: list[dict], system: str = "", max_tokens: int = 1000, model: str = models.HAIKU, prefer_provider: str = None
     ) -> Optional[str]:
         """Generate text with 7-provider fallback chain.
         Chain: Anthropic → NVIDIA → Groq → Gemini → Cerebras → OpenRouter → Ollama

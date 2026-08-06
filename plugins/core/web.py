@@ -99,20 +99,53 @@ class AutoSearchSkill(Skill):
     description = "Automatically search the web and return a summarized answer."
 
     async def execute(self, query: str, **kwargs) -> SkillResult:
-        """Search DuckDuckGo instant answers API for quick facts."""
+        import os
+        import httpx
+        import urllib.parse
+        from bs4 import BeautifulSoup
+        import re
+        
+        perplexity_key = os.getenv("PERPLEXITY_API_KEY")
+        
+        if perplexity_key:
+            # Try Perplexity first
+            try:
+                headers = {
+                    "Authorization": f"Bearer {perplexity_key}",
+                    "Content-Type": "application/json"
+                }
+                payload = {
+                    "model": "sonar",
+                    "messages": [
+                        {"role": "system", "content": "You are a concise AI assistant. Provide a brief 2-4 sentence answer to the user's query."},
+                        {"role": "user", "content": query}
+                    ]
+                }
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    resp = await client.post("https://api.perplexity.ai/chat/completions", headers=headers, json=payload)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        answer = data["choices"][0]["message"]["content"]
+                        citations = data.get("citations", [])
+                        
+                        spoken_text = answer
+                        if citations:
+                            top_sources = ", ".join(citations[:2])
+                            spoken_text += f" Sources include: {top_sources}"
+                            
+                        return SkillResult(True, spoken_text, data={"answer": answer, "citations": citations})
+            except Exception as e:
+                import logging
+                logging.getLogger("LIS.plugins").warning(f"Perplexity API failed: {e}. Falling back to DuckDuckGo.")
+
+        # Fallback to DuckDuckGo scrape logic
         try:
-            import httpx
-            from bs4 import BeautifulSoup
-            import urllib.parse
-            import re
-            
             url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(query)}"
             headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
             
             async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-                resp = await client.post(url, headers=headers, data={'q': query}) # DDG HTML prefers POST for the first query
+                resp = await client.post(url, headers=headers, data={'q': query})
                 
-                # Fallback to GET if POST fails or returns empty
                 if resp.status_code != 200 or "No results" in resp.text:
                     resp = await client.get(url, headers=headers)
                 
@@ -125,9 +158,7 @@ class AutoSearchSkill(Skill):
                             snippets.append(text)
                             
                     if snippets:
-                        # Combine top 3 snippets for a rich summary
                         combined = " ".join(snippets[:3])
-                        # Clean up weird characters
                         combined = re.sub(r'[^\x00-\x7F]+', ' ', combined)
                         return SkillResult(True, f"I found some information: {combined[:800]}", data=combined)
             
@@ -138,6 +169,53 @@ class AutoSearchSkill(Skill):
         except Exception as e:
             return SkillResult(False, f"Auto-search failed: {e}")
 registry.register(AutoSearchSkill())
+
+
+class DeepResearchSkill(Skill):
+    name = "deep_research"
+    description = "Conduct a thorough, multi-source research report on a complex topic, with citations. Slower and more expensive than a quick search — use only when the user wants deep, comprehensive analysis rather than a fast answer."
+    
+    async def execute(self, topic: str, **kwargs) -> SkillResult:
+        import os
+        import httpx
+        
+        perplexity_key = os.getenv("PERPLEXITY_API_KEY")
+        if not perplexity_key:
+            return SkillResult(False, "Deep research isn't configured — PERPLEXITY_API_KEY is missing.")
+            
+        try:
+            headers = {
+                "Authorization": f"Bearer {perplexity_key}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": "sonar-deep-research",
+                "messages": [
+                    {"role": "system", "content": "You are an expert researcher. Provide a comprehensive, detailed report on the topic with citations."},
+                    {"role": "user", "content": topic}
+                ]
+            }
+            
+            async with httpx.AsyncClient(timeout=150.0) as client:
+                resp = await client.post("https://api.perplexity.ai/chat/completions", headers=headers, json=payload)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    answer = data["choices"][0]["message"]["content"]
+                    citations = data.get("citations", [])
+                    
+                    # Log the research report securely
+                    try:
+                        import osint_store
+                        osint_store.log_evidence("deep_research", topic, "Perplexity Sonar Deep Research", data)
+                    except Exception:
+                        pass
+                        
+                    return SkillResult(True, f"I've completed the deep research on '{topic}'. The full report is ready.", data={"answer": answer, "citations": citations})
+                else:
+                    return SkillResult(False, f"Perplexity API returned status {resp.status_code}: {resp.text}")
+        except Exception as e:
+            return SkillResult(False, f"Deep research failed: {e}")
+registry.register(DeepResearchSkill())
 
 class ScrapeSiteSkill(Skill):
     name = "scrape_site"
