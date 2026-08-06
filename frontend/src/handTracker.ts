@@ -196,11 +196,15 @@ export class HandTracker {
       if (this.prevSpinGrab) {
         const dx = grab.x - this.prevSpinGrab.x;
         const dy = grab.y - this.prevSpinGrab.y;
+        // Only trigger rotate if movement is significant
         if (Math.abs(dx) > 0.0015 || Math.abs(dy) > 0.0015) {
           this.callbacks.onRotate(dx * ROTATE_SPEED, dy * ROTATE_SPEED);
+          // Accumulate micro-movements by only updating the reference point when we actually rotated
+          this.prevSpinGrab = grab;
         }
+      } else {
+        this.prevSpinGrab = grab;
       }
-      this.prevSpinGrab = grab;
     } else if (mode === "zoom") {
       const d = Math.hypot(
         pinchedGrabs[0].x - pinchedGrabs[1].x,

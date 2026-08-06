@@ -91,11 +91,15 @@ class LLMProviders:
 
         try:
             import anthropic as _anth
-            resp = await self.anthropic_client.messages.create(
-                model=model,
-                max_tokens=max_tokens,
-                system=system,
-                messages=messages,
+            import asyncio
+            resp = await asyncio.wait_for(
+                self.anthropic_client.messages.create(
+                    model=model,
+                    max_tokens=max_tokens,
+                    system=system,
+                    messages=messages,
+                ),
+                timeout=30.0
             )
             # Track usage
             inp = getattr(resp.usage, "input_tokens", 0) if hasattr(resp, "usage") else 0
@@ -125,7 +129,7 @@ class LLMProviders:
         full_messages.extend(messages[-10:])
 
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=3.0)) as client:
                 resp = await client.post(
                     "https://api.groq.com/openai/v1/chat/completions",
                     headers={
@@ -167,7 +171,7 @@ class LLMProviders:
             parts.append({"text": f"{role_prefix}{msg['content']}"})
 
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=3.0)) as client:
                 resp = await client.post(url, json={
                     "contents": [{"parts": parts}],
                     "generationConfig": {"maxOutputTokens": max_tokens},
@@ -203,7 +207,7 @@ class LLMProviders:
         full_messages.extend(messages[-10:])
 
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=3.0)) as client:
                 resp = await client.post(
                     "https://api.cerebras.ai/v1/chat/completions",
                     headers={
@@ -243,7 +247,7 @@ class LLMProviders:
         full_messages.extend(messages[-10:])
 
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=3.0)) as client:
                 resp = await client.post(
                     "https://integrate.api.nvidia.com/v1/chat/completions",
                     headers={
@@ -287,7 +291,7 @@ class LLMProviders:
         full_messages.extend(messages[-10:])
 
         try:
-            async with httpx.AsyncClient(timeout=20.0) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=3.0)) as client:
                 resp = await client.post(
                     "https://openrouter.ai/api/v1/chat/completions",
                     headers={
@@ -330,7 +334,7 @@ class LLMProviders:
         full_messages.extend(messages[-10:])
 
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=3.0)) as client:
                 resp = await client.post(
                     f"{self.ollama_url}/api/chat",
                     json={

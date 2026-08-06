@@ -1135,7 +1135,7 @@ async def generate_text_groq(messages: list[dict], system_prompt: str = "") -> O
     full_messages.extend(messages)
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=3.0)) as client:
             resp = await client.post(
                 url,
                 headers=headers,
@@ -1172,7 +1172,7 @@ async def generate_text_gemini(messages: list[dict], system_prompt: str = "") ->
         parts.append({"text": f"{role_prefix}{msg['content']}"})
     
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=3.0)) as client:
             resp = await client.post(url, json={
                 "contents": [{"parts": parts}],
                 "generationConfig": {"maxOutputTokens": 300}
@@ -1204,7 +1204,7 @@ async def generate_text_ollama(messages: list[dict], system_prompt: str = "") ->
     full_messages.extend(messages[-10:])
     
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=3.0)) as client:
             resp = await client.post(
                 f"{OLLAMA_URL}/api/chat",
                 json={
@@ -1235,7 +1235,7 @@ async def generate_text_cerebras(messages: list[dict], system_prompt: str = "") 
     full_messages.extend(messages[-10:])
 
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=3.0)) as client:
             resp = await client.post(
                 "https://api.cerebras.ai/v1/chat/completions",
                 headers={
@@ -1275,7 +1275,7 @@ async def generate_text_openrouter(messages: list[dict], system_prompt: str = ""
     full_messages.extend(messages[-10:])
 
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=3.0)) as client:
             resp = await client.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 headers={
@@ -1320,7 +1320,7 @@ async def generate_text_nvidia(messages: list[dict], system_prompt: str = "") ->
     full_messages.extend(messages[-10:])
 
     try:
-        async with httpx.AsyncClient(timeout=45.0) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(45.0, connect=3.0)) as client:
             resp = await client.post(
                 "https://integrate.api.nvidia.com/v1/chat/completions",
                 headers={
@@ -1388,14 +1388,32 @@ async def generate_text(
     Chain: Anthropic → NVIDIA → Groq → Gemini → Cerebras → OpenRouter → Ollama
     LIS is NEVER truly down — always has a response.
     """
+    primary = os.getenv("PRIMARY_PROVIDER", "anthropic").lower()
+
+    # If user wants a different primary (like nvidia)
+    if primary != "anthropic":
+        chain = _build_fallback_chain()
+        # Find the primary in the chain and run it first
+        for name, fn in chain:
+            if name.lower() == primary and not API_DEAD.get(primary):
+                try:
+                    res = await fn(messages, system_prompt=system)
+                    if res: return res
+                except Exception as e:
+                    log.warning(f"Primary provider {name} failed: {e}")
+                    API_DEAD[primary] = True
+
     # INSTANT SKIP: If Anthropic is dead, jump straight to fallback chain
     if not API_DEAD.get("anthropic") and ANTHROPIC_API_KEY and len(ANTHROPIC_API_KEY) > 20:
         try:
-            resp = await client.messages.create(
-                model=model,
-                max_tokens=max_tokens,
-                system=system,
-                messages=messages,
+            resp = await asyncio.wait_for(
+                client.messages.create(
+                    model=model,
+                    max_tokens=max_tokens,
+                    system=system,
+                    messages=messages,
+                ),
+                timeout=30.0
             )
             return resp.content[0].text
         except Exception as e:
@@ -1410,6 +1428,7 @@ async def generate_text(
     # Cascading free fallback chain
     chain = _build_fallback_chain()
     for name, fn in chain:
+        if name.lower() == primary: continue # Already tried
         try:
             result = await fn(messages, system_prompt=system)
             if result:
