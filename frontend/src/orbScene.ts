@@ -659,7 +659,11 @@ export function createOrbScene(container: HTMLElement): OrbSceneApi {
   const sphericalScratch = new THREE.Spherical();
   const offsetScratch = new THREE.Vector3();
 
+  let dampingRestoreTimeout: number | null = null;
   function rotateBy(deltaTheta: number, deltaPhi: number) {
+    // Disable damping temporarily so OrbitControls doesn't fight the manual position update
+    controls.enableDamping = false;
+    
     offsetScratch.copy(camera.position).sub(controls.target);
     sphericalScratch.setFromVector3(offsetScratch);
     sphericalScratch.theta -= deltaTheta;
@@ -672,9 +676,16 @@ export function createOrbScene(container: HTMLElement): OrbSceneApi {
     offsetScratch.setFromSpherical(sphericalScratch);
     camera.position.copy(controls.target).add(offsetScratch);
     camera.lookAt(controls.target);
+
+    // Restore damping after the gesture finishes
+    if (dampingRestoreTimeout) clearTimeout(dampingRestoreTimeout);
+    dampingRestoreTimeout = window.setTimeout(() => {
+      controls.enableDamping = true;
+    }, 100);
   }
 
   function zoomBy(factor: number) {
+    controls.enableDamping = false;
     offsetScratch.copy(camera.position).sub(controls.target);
     const dist = THREE.MathUtils.clamp(
       offsetScratch.length() * factor,
@@ -683,6 +694,11 @@ export function createOrbScene(container: HTMLElement): OrbSceneApi {
     );
     offsetScratch.setLength(dist);
     camera.position.copy(controls.target).add(offsetScratch);
+    
+    if (dampingRestoreTimeout) clearTimeout(dampingRestoreTimeout);
+    dampingRestoreTimeout = window.setTimeout(() => {
+      controls.enableDamping = true;
+    }, 100);
   }
 
   function resetView() {

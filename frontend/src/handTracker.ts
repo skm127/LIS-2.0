@@ -22,7 +22,7 @@ const PINCH_OFF = 0.45;
 // How strongly hand movement rotates the orb (radians per normalized unit)
 const ROTATE_SPEED = 5.0;
 // Smoothing factor for grab-point tracking (0..1, higher = snappier)
-const SMOOTHING = 0.4;
+const SMOOTHING = 0.15;
 
 export type GestureMode = "idle" | "spin" | "zoom";
 
@@ -196,7 +196,7 @@ export class HandTracker {
       if (this.prevSpinGrab) {
         const dx = grab.x - this.prevSpinGrab.x;
         const dy = grab.y - this.prevSpinGrab.y;
-        if (Math.abs(dx) > 1e-4 || Math.abs(dy) > 1e-4) {
+        if (Math.abs(dx) > 0.0015 || Math.abs(dy) > 0.0015) {
           this.callbacks.onRotate(dx * ROTATE_SPEED, dy * ROTATE_SPEED);
         }
       }
