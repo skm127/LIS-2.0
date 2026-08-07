@@ -110,7 +110,7 @@ class CompanyLookupSkill(Skill):
                     resp = await client.get(oc_url)
                     if resp.status_code == 200:
                         data = resp.json()
-                        companies = data.get("results", {}).get("companies", [])
+                        companies = (data.get("results") or {}).get("companies") or []
                         results["opencorporates"] = [c.get("company") for c in companies[:5]]
                     else:
                         results["opencorporates_error"] = f"HTTP {resp.status_code}"
@@ -173,11 +173,12 @@ class UsernameSearchSkill(Skill):
         if not purpose or not purpose.strip():
             return SkillResult(False, "Missing purpose. Please ask the user why they need this username checked before proceeding.")
             
+        safe_user = urllib.parse.quote(username, safe='')
         platforms = {
-            "github": f"https://github.com/{username}",
-            "reddit": f"https://www.reddit.com/user/{username}",
-            "instagram": f"https://www.instagram.com/{username}/",
-            "twitter_x": f"https://x.com/{username}"
+            "github": f"https://github.com/{safe_user}",
+            "reddit": f"https://www.reddit.com/user/{safe_user}",
+            "instagram": f"https://www.instagram.com/{safe_user}/",
+            "twitter_x": f"https://x.com/{safe_user}"
         }
         
         results = {}

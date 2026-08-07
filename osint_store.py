@@ -23,7 +23,7 @@ def _redact_secrets(text: str) -> str:
     """Scrub obvious secrets/credentials from raw data before storing."""
     if not isinstance(text, str):
         try:
-            text = json.dumps(text)
+            text = json.dumps(text, default=str)
         except:
             text = str(text)
             

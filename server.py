@@ -1101,7 +1101,7 @@ async def synthesize_speech(text: str) -> Optional[bytes]:
         from gtts import gTTS
         tts = gTTS(text=text, lang='en', tld='co.in')
         g_fp = io.BytesIO()
-        tts.write_to_fp(g_fp)
+        await asyncio.to_thread(tts.write_to_fp, g_fp)
         audio_data = g_fp.getvalue()
         if len(audio_data) < 512:
             log.error("gTTS also returned tiny audio")
@@ -2506,7 +2506,7 @@ async def _lookup_and_report(lookup_type: str, lookup_fn, ws, history: list[dict
             try:
                 await ws.send_json({"type": "status", "state": "speaking"})
                 if audio:
-                    await ws.send_json({"type": "audio", "data": audio, "text": result_text})
+                    await ws.send_json({"type": "audio", "data": base64.b64encode(audio).decode(), "text": result_text})
                 else:
                     await ws.send_json({"type": "text", "text": result_text})
                 await ws.send_json({"type": "status", "state": "idle"})
@@ -2526,7 +2526,7 @@ async def _lookup_and_report(lookup_type: str, lookup_fn, ws, history: list[dict
             audio = await synthesize_speech(fallback)
             await ws.send_json({"type": "status", "state": "speaking"})
             if audio:
-                await ws.send_json({"type": "audio", "data": audio, "text": fallback})
+                await ws.send_json({"type": "audio", "data": base64.b64encode(audio).decode(), "text": fallback})
             await ws.send_json({"type": "status", "state": "idle"})
         except Exception:
             pass
@@ -2978,8 +2978,8 @@ async def voice_handler(ws: WebSocket):
         # ── Proactive Voice Listener ──
         async def _check_voice_queue():
             """Drain the thread-safe queue.Queue from the async side."""
-            try:
-                while True:
+            while True:
+                try:
                     # Poll the thread-safe queue; yield control between checks
                     try:
                         text = task_manager._voice_queue.get_nowait()
@@ -2994,10 +2994,13 @@ async def voice_handler(ws: WebSocket):
                             await ws.send_json({"type": "status", "state": "speaking"})
                             await ws.send_json({"type": "audio", "data": encoded, "text": text})
                             await ws.send_json({"type": "status", "state": "idle"})
-            except Exception as e:
-                log.debug(f"Voice queue listener error: {e}")
+                except asyncio.CancelledError:
+                    return  # Clean shutdown on disconnect
+                except Exception as e:
+                    log.debug(f"Voice queue listener error: {e}")
+                    await asyncio.sleep(1)  # Back off on error, then keep going
 
-        asyncio.create_task(_check_voice_queue())
+        voice_queue_task = asyncio.create_task(_check_voice_queue())
 
         while True:
             raw = await ws.receive_text()
@@ -3480,7 +3483,15 @@ async def voice_handler(ws: WebSocket):
 
 
     except Exception:
-        return  # WebSocket already gone
+        pass  # WebSocket already gone
+    finally:
+        # Clean up: unregister WS and cancel voice queue poller
+        task_manager.unregister_websocket(ws)
+        try:
+            voice_queue_task.cancel()
+        except Exception:
+            pass
+        log.info("Voice WebSocket disconnected and cleaned up")
 
 # Settings / Configuration endpoints
 # ---------------------------------------------------------------------------

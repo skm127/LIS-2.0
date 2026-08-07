@@ -134,6 +134,9 @@ class AutoSearchSkill(Skill):
                             spoken_text += f" Sources include: {top_sources}"
                             
                         return SkillResult(True, spoken_text, data={"answer": answer, "citations": citations})
+                    else:
+                        import logging
+                        logging.getLogger("LIS.plugins").warning(f"Perplexity API returned {resp.status_code}, falling back to DuckDuckGo.")
             except Exception as e:
                 import logging
                 logging.getLogger("LIS.plugins").warning(f"Perplexity API failed: {e}. Falling back to DuckDuckGo.")
