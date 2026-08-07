@@ -335,8 +335,9 @@ class LLMProviders:
         full_messages.extend(messages[-10:])
 
         try:
-            # Local models take time to load into VRAM, so use a generous 60s timeout
-            async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=2.0)) as client:
+            # Local models take time to load into VRAM, use a generous 60s timeout
+            # Note: Do not use strict connect=2.0 as Windows Defender/firewalls can delay localhost handshake
+            async with httpx.AsyncClient(timeout=60.0) as client:
                 resp = await client.post(
                     f"{self.ollama_url}/api/chat",
                     json={
