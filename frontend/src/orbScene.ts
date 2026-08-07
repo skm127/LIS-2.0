@@ -16,6 +16,7 @@ export interface OrbSceneApi {
   dispose(): void;
   updateState(state: string): void;
   setAnalyser(analyser: AnalyserNode | null): void;
+  setEmotion(palette: Record<string, string>, intensity: number, durationMs: number): void;
 }
 
 const HOME_POSITION = new THREE.Vector3(0, 0.5, 5.5);
@@ -56,6 +57,8 @@ export function createOrbScene(container: HTMLElement): OrbSceneApi {
       tDiffuse: { value: null },
       uTime: { value: 0 },
       uIntensity: { value: 0.003 },
+      uTint: { value: new THREE.Color(0x33aaff) },
+      uBaseIntensity: { value: 0 },
     },
     vertexShader: `
       varying vec2 vUv;
@@ -68,6 +71,8 @@ export function createOrbScene(container: HTMLElement): OrbSceneApi {
       uniform sampler2D tDiffuse;
       uniform float uTime;
       uniform float uIntensity;
+      uniform vec3 uTint;
+      uniform float uBaseIntensity;
       varying vec2 vUv;
       void main() {
         vec2 dir = vUv - vec2(0.5);
@@ -79,8 +84,9 @@ export function createOrbScene(container: HTMLElement): OrbSceneApi {
         vec4 cg = texture2D(tDiffuse, vUv);
         vec4 cb = texture2D(tDiffuse, vUv - dir * offset * 0.5);
         gl_FragColor = vec4(cr.r * 0.6, cg.g * 1.05, cb.b, 1.0) * flicker;
-        // Push towards blue/cyan tone
-        gl_FragColor.rgb = mix(gl_FragColor.rgb, gl_FragColor.rgb * vec3(0.55, 0.85, 1.15), 0.3);
+        // Push towards emotion tint (scales with emotion intensity)
+        vec3 tint = mix(vec3(0.55, 0.85, 1.15), uTint * 2.0, uBaseIntensity * 0.8);
+        gl_FragColor.rgb = mix(gl_FragColor.rgb, gl_FragColor.rgb * tint, 0.3 + (uBaseIntensity * 0.2));
       }
     `,
   };
@@ -96,12 +102,27 @@ export function createOrbScene(container: HTMLElement): OrbSceneApi {
   controls.zoomSpeed = 1.4;
   controls.enablePan = false;
 
-  // ——— COLORS ———
-  const C_BRIGHT = 0x33aaff;
-  const C_MID = 0x0077dd;
-  const C_DIM = 0x004488;
-  const C_FAINT = 0x002244;
-  const C_HOT = 0xaaddff;
+  // ——— DYNAMIC COLORS ———
+  type ColorKey = 'bright' | 'mid' | 'dim' | 'faint' | 'hot';
+  interface ColorGroup {
+    current: THREE.Color;
+    target: THREE.Color;
+    mats: THREE.Material[];
+  }
+
+  const colorGroups: Record<ColorKey, ColorGroup> = {
+    bright: { current: new THREE.Color(0x33aaff), target: new THREE.Color(0x33aaff), mats: [] },
+    mid:    { current: new THREE.Color(0x0077dd), target: new THREE.Color(0x0077dd), mats: [] },
+    dim:    { current: new THREE.Color(0x004488), target: new THREE.Color(0x004488), mats: [] },
+    faint:  { current: new THREE.Color(0x002244), target: new THREE.Color(0x002244), mats: [] },
+    hot:    { current: new THREE.Color(0xaaddff), target: new THREE.Color(0xaaddff), mats: [] }
+  };
+  
+  let transitionTime = 0;
+  let transitionDuration = 1.0;
+  let isTransitioning = false;
+  let baseIntensity = 0; // to scale interpolation if needed
+
 
   // ——— ORB ROOT ———
   // Every part of the orb (shells, core, orbiting debris, text, dust, rings)
@@ -110,14 +131,16 @@ export function createOrbScene(container: HTMLElement): OrbSceneApi {
   scene.add(orbGroup);
 
   // ——— MATERIAL HELPERS ———
-  function lineMat(color: number, opacity = 1) {
-    return new THREE.LineBasicMaterial({
-      color,
+  function lineMat(key: ColorKey, opacity = 1) {
+    const mat = new THREE.LineBasicMaterial({
+      color: colorGroups[key].current.clone(),
       transparent: true,
       opacity,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     });
+    colorGroups[key].mats.push(mat);
+    return mat;
   }
 
   // ——— UTILITY: Create ring at latitude ———
@@ -158,8 +181,8 @@ export function createOrbScene(container: HTMLElement): OrbSceneApi {
   for (let i = -15; i <= 15; i++) {
     const lat = (i / 15) * (Math.PI / 2) * 0.95;
     const opacity = i % 3 === 0 ? 0.5 : 0.12;
-    const color = i % 3 === 0 ? C_MID : C_FAINT;
-    outerShell.add(new THREE.Line(latRing(R1, lat), lineMat(color, opacity)));
+    const color = i % 3 === 0 ? 'mid' : 'faint';
+    outerShell.add(new THREE.Line(latRing(R1, lat), lineMat(color as ColorKey, opacity)));
   }
 
   // Dense meridians (24)
@@ -169,7 +192,7 @@ export function createOrbScene(container: HTMLElement): OrbSceneApi {
     outerShell.add(
       new THREE.Line(
         meridian(R1, lon),
-        lineMat(isMajor ? C_MID : C_FAINT, isMajor ? 0.6 : 0.1),
+        lineMat(isMajor ? 'mid' : 'faint', isMajor ? 0.6 : 0.1),
       ),
     );
   }
@@ -184,9 +207,9 @@ export function createOrbScene(container: HTMLElement): OrbSceneApi {
       const offset = (t * CROSS_SPREAD) / 2;
       const falloff = 1 - Math.abs(t) * 0.7; // brighter at center, dimmer at edges
       const opacity = 0.85 * falloff;
-      const color = Math.abs(t) < 0.3 ? C_BRIGHT : C_MID;
+      const color = Math.abs(t) < 0.3 ? 'bright' : 'mid';
       outerShell.add(
-        new THREE.Line(meridian(R1, lon + offset, 200), lineMat(color, opacity)),
+        new THREE.Line(meridian(R1, lon + offset, 200), lineMat(color as ColorKey, opacity)),
       );
     }
   }
@@ -199,9 +222,9 @@ export function createOrbScene(container: HTMLElement): OrbSceneApi {
     const offset = (t * EQ_SPREAD) / 2;
     const falloff = 1 - Math.abs(t) * 0.65;
     const opacity = 0.8 * falloff;
-    const color = Math.abs(t) < 0.3 ? C_BRIGHT : C_MID;
+    const color = Math.abs(t) < 0.3 ? 'bright' : 'mid';
     outerShell.add(
-      new THREE.Line(latRing(R1, offset, 200), lineMat(color, opacity)),
+      new THREE.Line(latRing(R1, offset, 200), lineMat(color as ColorKey, opacity)),
     );
   }
 
@@ -221,7 +244,7 @@ export function createOrbScene(container: HTMLElement): OrbSceneApi {
     divisions = 4,
   ) {
     const group = new THREE.Group();
-    const mat = lineMat(C_DIM, 0.25);
+    const mat = lineMat('dim', 0.25);
 
     // horizontal lines
     for (let i = 0; i <= divisions; i++) {
@@ -299,7 +322,7 @@ export function createOrbScene(container: HTMLElement): OrbSceneApi {
     shell2.add(
       new THREE.Line(
         new THREE.BufferGeometry().setFromPoints(pts),
-        lineMat(C_MID, 0.2 + Math.random() * 0.3),
+        lineMat('mid', 0.2 + Math.random() * 0.3),
       ),
     );
   }
@@ -324,7 +347,7 @@ export function createOrbScene(container: HTMLElement): OrbSceneApi {
     shell2.add(
       new THREE.Line(
         new THREE.BufferGeometry().setFromPoints(pts),
-        lineMat(C_DIM, 0.15 + Math.random() * 0.2),
+        lineMat('dim', 0.15 + Math.random() * 0.2),
       ),
     );
   }
@@ -357,7 +380,7 @@ export function createOrbScene(container: HTMLElement): OrbSceneApi {
     innerCore.add(
       new THREE.Line(
         new THREE.BufferGeometry().setFromPoints(pts),
-        lineMat(C_BRIGHT, 0.3 + Math.random() * 0.2),
+        lineMat('bright', 0.3 + Math.random() * 0.2),
       ),
     );
   }
@@ -365,13 +388,13 @@ export function createOrbScene(container: HTMLElement): OrbSceneApi {
   // Inner latitude rings
   for (let i = -6; i <= 6; i++) {
     const lat = (i / 6) * (Math.PI / 2) * 0.9;
-    innerCore.add(new THREE.Line(latRing(R3, lat, 80), lineMat(C_DIM, 0.2)));
+    innerCore.add(new THREE.Line(latRing(R3, lat, 80), lineMat('dim', 0.2)));
   }
 
   // Inner meridians
   for (let i = 0; i < 12; i++) {
     const lon = (i / 12) * Math.PI * 2;
-    innerCore.add(new THREE.Line(meridian(R3, lon, 80), lineMat(C_DIM, 0.15)));
+    innerCore.add(new THREE.Line(meridian(R3, lon, 80), lineMat('dim', 0.15)));
   }
 
   orbGroup.add(innerCore);
@@ -384,13 +407,13 @@ export function createOrbScene(container: HTMLElement): OrbSceneApi {
   // Icosahedron wireframe core
   const icoGeo = new THREE.IcosahedronGeometry(coreR, 1);
   const icoEdges = new THREE.EdgesGeometry(icoGeo);
-  const icoWireMat = lineMat(C_HOT, 0.9);
+  const icoWireMat = lineMat('hot', 0.9);
   const icoWire = new THREE.LineSegments(icoEdges, icoWireMat);
   orbGroup.add(icoWire);
 
   // Glowing center sphere — subtle, see-through
   const coreSphereMat = new THREE.MeshBasicMaterial({
-    color: C_HOT,
+    color: colorGroups.hot.current.clone(),
     transparent: true,
     opacity: 0.15,
     blending: THREE.AdditiveBlending,
@@ -400,7 +423,7 @@ export function createOrbScene(container: HTMLElement): OrbSceneApi {
 
   // Larger faint glow — very subtle
   const glowSphereMat = new THREE.MeshBasicMaterial({
-    color: C_MID,
+    color: colorGroups.mid.current.clone(),
     transparent: true,
     opacity: 0.04,
     blending: THREE.AdditiveBlending,
@@ -436,19 +459,24 @@ export function createOrbScene(container: HTMLElement): OrbSceneApi {
     const ctx = c.getContext("2d")!;
     ctx.font = "bold 14px Courier New";
     const alpha = 0.35 + Math.random() * 0.55;
-    ctx.fillStyle = `rgba(${(20 + Math.random() * 30) | 0}, ${(130 + Math.random() * 80) | 0}, 255, ${alpha})`;
+    ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(text, 128, 16);
     const tex = new THREE.CanvasTexture(c);
     tex.minFilter = THREE.LinearFilter;
     const s = new THREE.Sprite(
-      new THREE.SpriteMaterial({
-        map: tex,
-        transparent: true,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-      }),
+      (() => {
+        const smat = new THREE.SpriteMaterial({
+          map: tex,
+          color: colorGroups.mid.current.clone(),
+          transparent: true,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+        });
+        colorGroups.mid.mats.push(smat);
+        return smat;
+      })(),
     );
     s.scale.set(size * 5, size * 0.7, 1);
     return s;
@@ -532,7 +560,7 @@ export function createOrbScene(container: HTMLElement): OrbSceneApi {
   for (let i = 0; i < 250; i++) {
     const geo = debrisGeos[Math.floor(Math.random() * debrisGeos.length)];
     const mat = new THREE.MeshBasicMaterial({
-      color: Math.random() > 0.7 ? C_BRIGHT : C_MID,
+      color: Math.random() > 0.7 ? 'bright' : 'mid',
       transparent: true,
       opacity: 0.3 + Math.random() * 0.6,
       blending: THREE.AdditiveBlending,
@@ -562,7 +590,7 @@ export function createOrbScene(container: HTMLElement): OrbSceneApi {
       }
       const trail = new THREE.Line(
         new THREE.BufferGeometry().setFromPoints(trailPts),
-        lineMat(C_FAINT, 0.08),
+        lineMat('faint', 0.08),
       );
       mesh.add(trail);
     }
@@ -592,10 +620,10 @@ export function createOrbScene(container: HTMLElement): OrbSceneApi {
   dotC.width = dotC.height = 64;
   const dCtx = dotC.getContext("2d")!;
   const g = dCtx.createRadialGradient(32, 32, 0, 32, 32, 32);
-  g.addColorStop(0, "rgba(48,170,255,1)");
-  g.addColorStop(0.2, "rgba(20,120,255,0.6)");
-  g.addColorStop(0.5, "rgba(0,80,200,0.15)");
-  g.addColorStop(1, "rgba(0,40,100,0)");
+  g.addColorStop(0, "rgba(255,255,255,1)");
+  g.addColorStop(0.2, "rgba(255,255,255,0.6)");
+  g.addColorStop(0.5, "rgba(255,255,255,0.15)");
+  g.addColorStop(1, "rgba(255,255,255,0)");
   dCtx.fillStyle = g;
   dCtx.fillRect(0, 0, 64, 64);
 
@@ -607,9 +635,10 @@ export function createOrbScene(container: HTMLElement): OrbSceneApi {
     blending: THREE.AdditiveBlending,
     depthWrite: false,
     sizeAttenuation: true,
-    color: C_BRIGHT,
+    color: colorGroups.bright.current.clone(),
   });
   const dustPoints = new THREE.Points(dustGeo, dustMat);
+  colorGroups.bright.mats.push(dustMat);
   orbGroup.add(dustPoints);
 
   // ═══════════════════════════════════════════════
@@ -618,7 +647,7 @@ export function createOrbScene(container: HTMLElement): OrbSceneApi {
   function makeScanRing(radius: number, thickness = 0.015) {
     const geo = new THREE.RingGeometry(radius - thickness, radius + thickness, 120);
     const mat = new THREE.MeshBasicMaterial({
-      color: C_BRIGHT,
+      color: colorGroups.bright.current.clone(),
       transparent: true,
       opacity: 0,
       blending: THREE.AdditiveBlending,
@@ -643,7 +672,7 @@ export function createOrbScene(container: HTMLElement): OrbSceneApi {
     const r = R1 + 0.02;
     const hexGeo = new THREE.CircleGeometry(0.03 + Math.random() * 0.02, 6);
     const hexEdges = new THREE.EdgesGeometry(hexGeo);
-    const hex = new THREE.LineSegments(hexEdges, lineMat(C_MID, 0.5));
+    const hex = new THREE.LineSegments(hexEdges, lineMat('mid', 0.5));
     hex.position.set(
       r * Math.sin(phi) * Math.cos(theta),
       r * Math.cos(phi),
@@ -723,6 +752,34 @@ export function createOrbScene(container: HTMLElement): OrbSceneApi {
     if (disposed) return;
     rafId = requestAnimationFrame(animate);
     const t = clock.getElapsedTime();
+
+    // Transition Colors in HSL space
+    if (isTransitioning) {
+      transitionTime += 0.016; // Approx fixed step to avoid getDelta issues if called poorly
+      let progress = transitionTime / transitionDuration;
+      if (progress >= 1) {
+        progress = 1;
+        isTransitioning = false;
+      }
+      
+      // Easing function (easeOutQuad)
+      const ease = 1 - (1 - progress) * (1 - progress);
+      
+      const keys: ColorKey[] = ['bright', 'mid', 'dim', 'faint', 'hot'];
+      for (const k of keys) {
+        const group = colorGroups[k];
+        group.current.lerpHSL(group.target, ease);
+        for (const mat of group.mats) {
+          if ('color' in mat) {
+            (mat as any).color.copy(group.current);
+          }
+        }
+      }
+      
+      chromaticPass.uniforms.uTint.value.copy(colorGroups.bright.current);
+      chromaticPass.uniforms.uBaseIntensity.value = baseIntensity;
+    }
+
 
     let audioPulse = 0;
     if (audioAnalyser) {
@@ -905,6 +962,18 @@ export function createOrbScene(container: HTMLElement): OrbSceneApi {
     resetView,
     dispose,
     updateState: (state: string) => { currentState = state; },
-    setAnalyser: (node: AnalyserNode | null) => { audioAnalyser = node; }
+    setAnalyser: (node: AnalyserNode | null) => { audioAnalyser = node; },
+    setEmotion(palette: Record<string, string>, intensity: number, durationMs: number) {
+      colorGroups.bright.target.set(palette.bright);
+      colorGroups.mid.target.set(palette.mid);
+      colorGroups.dim.target.set(palette.dim);
+      colorGroups.faint.target.set(palette.faint);
+      colorGroups.hot.target.set(palette.hot);
+      
+      baseIntensity = intensity;
+      transitionDuration = durationMs / 1000;
+      transitionTime = 0;
+      isTransitioning = true;
+    }
   };
 }

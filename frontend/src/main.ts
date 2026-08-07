@@ -231,6 +231,13 @@ socket.onMessage((msg) => {
       console.log("[LIS]", msg.text);
       lastLisResponse += (lastLisResponse ? " " : "") + msg.text;
     }
+  } else if (type === "emotion") {
+    const palette = msg.palette?.palette as Record<string, string>;
+    const intensity = msg.intensity as number;
+    const durationMs = msg.palette?.transition_ms as number;
+    if (palette && intensity !== undefined) {
+      orb.setEmotion(palette, intensity, durationMs);
+    }
   } else if (type === "status") {
     const state = msg.state as string;
     if (state === "thinking" && currentState !== "thinking") {

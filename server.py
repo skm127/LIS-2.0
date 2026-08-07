@@ -41,6 +41,7 @@ from datetime import datetime, timedelta
 
 # Neural & Emotional Cores
 from empathy import EmpathyEngine
+import emotion_colors
 from brain import CognitiveCore
 
 # Load .env file if present
@@ -3132,6 +3133,24 @@ async def voice_handler(ws: WebSocket):
                         thought = "Focusing on the task."
 
                     empathy.update_state(sentiment_data)
+
+                    # Send real-time emotion color update to orb
+                    prev_intensity = getattr(empathy, '_last_sent_intensity', 0.5)
+                    palette_data = emotion_colors.get_palette(
+                        empathy.current_state.name,
+                        empathy._intensity,
+                        prev_intensity
+                    )
+                    empathy._last_sent_intensity = empathy._intensity
+                    try:
+                        await ws.send_json({
+                            "type": "emotion",
+                            "name": empathy.current_state.name,
+                            "intensity": empathy._intensity,
+                            "palette": palette_data
+                        })
+                    except Exception as e:
+                        log.debug(f"Failed to send emotion WS update: {e}")
 
                     # v3.0: Store signals for humor context
                     empathy._last_signals = sentiment_data.get("signals", {})
