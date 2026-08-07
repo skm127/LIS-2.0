@@ -232,9 +232,10 @@ socket.onMessage((msg) => {
       lastLisResponse += (lastLisResponse ? " " : "") + msg.text;
     }
   } else if (type === "emotion") {
-    const palette = msg.palette?.palette as Record<string, string>;
-    const intensity = msg.intensity as number;
-    const durationMs = msg.palette?.transition_ms as number;
+    const palettePayload = (msg as any).palette;
+    const palette = palettePayload?.palette as Record<string, string>;
+    const intensity = (msg as any).intensity as number;
+    const durationMs = palettePayload?.transition_ms as number;
     if (palette && intensity !== undefined) {
       orb.setEmotion(palette, intensity, durationMs);
     }
