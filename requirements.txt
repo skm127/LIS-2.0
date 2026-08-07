@@ -35,3 +35,7 @@ msal>=1.28.0
 # Browser Use Integration
 browser-use>=0.1.30
 langchain-openai>=0.2.0
+
+# OSINT Domain Recon
+python-whois>=0.9.4
+dnspython>=2.6.0

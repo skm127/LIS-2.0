@@ -212,7 +212,7 @@ class DeepResearchSkill(Skill):
                         
                     return SkillResult(True, f"I've completed the deep research on '{topic}'. The full report is ready.", data={"answer": answer, "citations": citations})
                 else:
-                    return SkillResult(False, f"Perplexity API returned status {resp.status_code}: {resp.text}")
+                    return SkillResult(False, f"Perplexity API returned status {resp.status_code}: {resp.text[:300]}")
         except Exception as e:
             return SkillResult(False, f"Deep research failed: {e}")
 registry.register(DeepResearchSkill())

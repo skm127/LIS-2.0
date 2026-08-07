@@ -4,6 +4,7 @@ import re
 import os
 import datetime
 from pathlib import Path
+from typing import Any
 
 # Secrets redaction patterns
 REDACTION_PATTERNS = [
@@ -69,58 +70,78 @@ def _init_db(conn):
 
 def create_case(question: str) -> int:
     """Create a new OSINT case to track lookups."""
-    with _get_conn() as conn:
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO cases (question) VALUES (?)", (question,))
-        conn.commit()
-        return cursor.lastrowid
+    conn = _get_conn()
+    try:
+        with conn:
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO cases (question) VALUES (?)", (question,))
+            conn.commit()
+            return cursor.lastrowid
+    finally:
+        conn.close()
 
 def _get_or_create_daily_case() -> int:
     """Get the current day's default case or create one."""
     today = datetime.datetime.now().strftime("%Y-%m-%d")
     question = f"Daily quick lookups for {today}"
-    with _get_conn() as conn:
-        cursor = conn.execute("SELECT id FROM cases WHERE question = ? ORDER BY id DESC LIMIT 1", (question,))
-        row = cursor.fetchone()
-        if row:
-            return row['id']
+    conn = _get_conn()
+    try:
+        with conn:
+            cursor = conn.execute("SELECT id FROM cases WHERE question = ? ORDER BY id DESC LIMIT 1", (question,))
+            row = cursor.fetchone()
+            if row:
+                return row['id']
+    finally:
+        conn.close()
     return create_case(question)
 
-def log_evidence(tool_name: str, query: str, source_url: str, raw_data: any, notes: str = "", case_id: int = None) -> int:
+def log_evidence(tool_name: str, query: str, source_url: str, raw_data: Any, notes: str = "", case_id: int = None) -> int:
     """Log evidence safely to the DB, redacting any obvious secrets first."""
     if not case_id:
         case_id = _get_or_create_daily_case()
         
     redacted_data = _redact_secrets(raw_data)
     
-    with _get_conn() as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO evidence (case_id, tool_name, query, source_url, raw_data_json, notes)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (case_id, tool_name, query, source_url, redacted_data, notes))
-        conn.commit()
-        return cursor.lastrowid
+    conn = _get_conn()
+    try:
+        with conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO evidence (case_id, tool_name, query, source_url, raw_data_json, notes)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (case_id, tool_name, query, source_url, redacted_data, notes))
+            conn.commit()
+            return cursor.lastrowid
+    finally:
+        conn.close()
 
 def get_case(case_id: int) -> dict:
-    with _get_conn() as conn:
-        case_row = conn.execute("SELECT * FROM cases WHERE id = ?", (case_id,)).fetchone()
-        if not case_row:
-            return None
-        
-        evidence_rows = conn.execute("SELECT * FROM evidence WHERE case_id = ? ORDER BY retrieved_at DESC", (case_id,)).fetchall()
-        
-        return {
-            "case": dict(case_row),
-            "evidence": [dict(r) for r in evidence_rows]
-        }
+    conn = _get_conn()
+    try:
+        with conn:
+            case_row = conn.execute("SELECT * FROM cases WHERE id = ?", (case_id,)).fetchone()
+            if not case_row:
+                return None
+            
+            evidence_rows = conn.execute("SELECT * FROM evidence WHERE case_id = ? ORDER BY retrieved_at DESC", (case_id,)).fetchall()
+            
+            return {
+                "case": dict(case_row),
+                "evidence": [dict(r) for r in evidence_rows]
+            }
+    finally:
+        conn.close()
 
 def list_recent_evidence(limit: int = 20) -> list:
-    with _get_conn() as conn:
-        rows = conn.execute('''
-            SELECT e.*, c.question as case_question 
-            FROM evidence e
-            LEFT JOIN cases c ON e.case_id = c.id
-            ORDER BY e.retrieved_at DESC LIMIT ?
-        ''', (limit,)).fetchall()
-        return [dict(r) for r in rows]
+    conn = _get_conn()
+    try:
+        with conn:
+            rows = conn.execute('''
+                SELECT e.*, c.question as case_question 
+                FROM evidence e
+                LEFT JOIN cases c ON e.case_id = c.id
+                ORDER BY e.retrieved_at DESC LIMIT ?
+            ''', (limit,)).fetchall()
+            return [dict(r) for r in rows]
+    finally:
+        conn.close()

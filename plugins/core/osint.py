@@ -2,6 +2,7 @@ import os
 import json
 import httpx
 import subprocess
+import asyncio
 from typing import Optional
 import urllib.parse
 from skills import Skill, SkillResult, registry
@@ -22,7 +23,7 @@ class DomainReconSkill(Skill):
         
         # WHOIS
         try:
-            w = whois.whois(domain)
+            w = await asyncio.to_thread(whois.whois, domain)
             result_data["whois"] = {
                 "registrar": w.registrar,
                 "creation_date": str(w.creation_date),
@@ -35,7 +36,7 @@ class DomainReconSkill(Skill):
         dns_records = {}
         for rtype in ["A", "MX", "TXT"]:
             try:
-                answers = dns.resolver.resolve(domain, rtype)
+                answers = await asyncio.to_thread(dns.resolver.resolve, domain, rtype)
                 dns_records[rtype] = [str(r) for r in answers]
             except Exception:
                 pass
@@ -51,7 +52,7 @@ class DomainReconSkill(Skill):
                     subdomains = set()
                     for c in certs:
                         if 'name_value' in c:
-                            for name in c['name_value'].split('\\n'):
+                            for name in c['name_value'].split('\n'):
                                 subdomains.add(name.strip().lower())
                     result_data["subdomains"] = list(subdomains)[:50] # cap to 50
         except Exception as e:
@@ -82,6 +83,8 @@ class ArchiveLookupSkill(Skill):
                     
                     osint_store.log_evidence(self.name, url, api_url, {"status": "no snapshots found"})
                     return SkillResult(False, "No snapshots found for this URL.")
+                else:
+                    return SkillResult(False, f"Wayback API returned status {resp.status_code}")
         except Exception as e:
             return SkillResult(False, f"Wayback API error: {e}")
 
@@ -113,8 +116,9 @@ class CompanyLookupSkill(Skill):
         # EDGAR full-text
         edgar_url = f"https://efts.sec.gov/LATEST/search-index?q={urllib.parse.quote(name)}"
         try:
+            headers = {"User-Agent": "LIS-OSINT-Module contact@example.com"} # Replace with real contact info per SEC terms
             async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(edgar_url)
+                resp = await client.get(edgar_url, headers=headers)
                 if resp.status_code == 200:
                     data = resp.json()
                     hits = data.get("hits", {}).get("hits", [])
@@ -138,7 +142,7 @@ class MetadataExtractSkill(Skill):
             
         try:
             # -j for JSON output
-            output = subprocess.check_output(['exiftool', '-j', file_path], stderr=subprocess.STDOUT)
+            output = await asyncio.to_thread(subprocess.check_output, ['exiftool', '-j', file_path], stderr=subprocess.STDOUT)
             data = json.loads(output)
             osint_store.log_evidence(self.name, file_path, "exiftool (local)", data)
             return SkillResult(True, f"Extracted metadata for {file_path}", data=data)
@@ -167,7 +171,8 @@ class UsernameSearchSkill(Skill):
         
         results = {}
         try:
-            async with httpx.AsyncClient(timeout=5.0, follow_redirects=False) as client:
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+            async with httpx.AsyncClient(timeout=5.0, follow_redirects=False, headers=headers) as client:
                 for site, url in platforms.items():
                     try:
                         resp = await client.head(url)

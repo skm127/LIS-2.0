@@ -9,7 +9,9 @@ import osint_store
 from plugins.core.osint import (
     DomainReconSkill, 
     UsernameSearchSkill, 
-    BreachCheckSkill
+    BreachCheckSkill,
+    ArchiveLookupSkill,
+    MetadataExtractSkill
 )
 from plugins.core.web import (
     AutoSearchSkill,
@@ -39,16 +41,21 @@ def test_osint_store_redaction():
 @pytest.mark.asyncio
 @patch('osint_store.log_evidence')
 @patch('httpx.AsyncClient.get', new_callable=AsyncMock)
-@patch('whois.whois')
-@patch('dns.resolver.resolve')
-async def test_domain_recon_happy_path(mock_dns, mock_whois, mock_get, mock_log_evidence):
+@patch('asyncio.to_thread', new_callable=AsyncMock)
+async def test_domain_recon_happy_path(mock_to_thread, mock_get, mock_log_evidence):
     # Setup mocks
-    mock_whois.return_value = MagicMock(registrar="TestRegistrar", creation_date="2020-01-01", name_servers=["ns1.test.com"])
-    mock_dns.return_value = ["127.0.0.1"]
+    def to_thread_side_effect(func, *args, **kwargs):
+        if getattr(func, '__name__', '') == 'whois':
+            return MagicMock(registrar="TestRegistrar", creation_date="2020-01-01", name_servers=["ns1.test.com"])
+        elif getattr(func, '__name__', '') == 'resolve':
+            return ["127.0.0.1"]
+        return MagicMock()
+        
+    mock_to_thread.side_effect = to_thread_side_effect
     
     mock_resp = MagicMock()
     mock_resp.status_code = 200
-    mock_resp.json.return_value = [{"name_value": "www.test.com\\nmail.test.com"}]
+    mock_resp.json.return_value = [{"name_value": "www.test.com\nmail.test.com"}]
     mock_get.return_value = mock_resp
     
     skill = DomainReconSkill()
@@ -57,13 +64,44 @@ async def test_domain_recon_happy_path(mock_dns, mock_whois, mock_get, mock_log_
     assert res.success is True
     assert "Completed domain recon" in res.confirmation
     
+    # Verify asyncio.to_thread was called for blocking ops
+    assert mock_to_thread.call_count >= 2
+    
     # Verify evidence was logged
     mock_log_evidence.assert_called_once()
     args, kwargs = mock_log_evidence.call_args
     assert args[0] == "domain_recon"
     assert args[1] == "test.com"
-    # Ensure our mocked subdomains are in the logged data
+    # Ensure our mocked subdomains are in the logged data separately
     assert "www.test.com" in args[3]["subdomains"]
+    assert "mail.test.com" in args[3]["subdomains"]
+
+@pytest.mark.asyncio
+@patch('httpx.AsyncClient.get', new_callable=AsyncMock)
+async def test_archive_lookup_error(mock_get):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 500
+    mock_get.return_value = mock_resp
+    
+    skill = ArchiveLookupSkill()
+    res = await skill.execute("test.com")
+    
+    assert res.success is False
+    assert "status 500" in res.confirmation
+    assert res is not None
+
+@pytest.mark.asyncio
+@patch('os.path.exists')
+@patch('asyncio.to_thread', new_callable=AsyncMock)
+async def test_metadata_extract_to_thread(mock_to_thread, mock_exists):
+    mock_exists.return_value = True
+    mock_to_thread.return_value = b'{"test": "data"}'
+    
+    skill = MetadataExtractSkill()
+    res = await skill.execute("test.jpg")
+    
+    assert res.success is True
+    mock_to_thread.assert_called_once()
 
 # 3. Test username_search graceful denial when purpose is empty
 @pytest.mark.asyncio
