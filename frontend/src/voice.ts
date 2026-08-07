@@ -142,6 +142,7 @@ export interface AudioPlayer {
   stop(): void;
   getAnalyser(): AnalyserNode;
   onFinished(cb: () => void): void;
+  isPlaying(): boolean;
 }
 
 export function createAudioPlayer(): AudioPlayer {
@@ -155,13 +156,28 @@ export function createAudioPlayer(): AudioPlayer {
   let isPlaying = false;
   let currentSource: AudioBufferSourceNode | null = null;
   let finishedCallback: (() => void) | null = null;
+  let graceTimer: number | null = null;
 
   function playNext() {
     if (queue.length === 0) {
-      isPlaying = false;
-      currentSource = null;
-      finishedCallback?.();
+      // Don't immediately declare finished — wait 300ms for more chunks
+      // This prevents premature idle transition between TTS sentence chunks
+      if (graceTimer) clearTimeout(graceTimer);
+      graceTimer = window.setTimeout(() => {
+        if (queue.length === 0) {
+          isPlaying = false;
+          currentSource = null;
+          finishedCallback?.();
+        } else {
+          playNext();
+        }
+      }, 300);
       return;
+    }
+
+    if (graceTimer) {
+      clearTimeout(graceTimer);
+      graceTimer = null;
     }
 
     isPlaying = true;
@@ -214,6 +230,10 @@ export function createAudioPlayer(): AudioPlayer {
 
     stop() {
       queue.length = 0;
+      if (graceTimer) {
+        clearTimeout(graceTimer);
+        graceTimer = null;
+      }
       if (currentSource) {
         try { currentSource.stop(); } catch {}
         currentSource = null;
@@ -228,5 +248,9 @@ export function createAudioPlayer(): AudioPlayer {
     onFinished(cb: () => void) {
       finishedCallback = cb;
     },
+
+    isPlaying() {
+      return isPlaying || queue.length > 0;
+    }
   };
 }

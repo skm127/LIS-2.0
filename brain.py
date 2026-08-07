@@ -62,11 +62,15 @@ class CognitiveCore:
 
         # Try Anthropic first
         try:
-            response = await self.client.messages.create(
-                model=models.HAIKU,
-                max_tokens=150,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_content}]
+            import asyncio
+            response = await asyncio.wait_for(
+                self.client.messages.create(
+                    model=models.HAIKU,
+                    max_tokens=150,
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": user_content}]
+                ),
+                timeout=8.0
             )
             raw = response.content[0].text
             self._parse_monologue(raw)

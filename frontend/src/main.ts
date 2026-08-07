@@ -248,7 +248,9 @@ socket.onMessage((msg) => {
       transition("thinking");
       statusEl.textContent = "working...";
     } else if (state === "idle") {
-      transition("idle");
+      if (!audioPlayer.isPlaying()) {
+        transition("idle");
+      }
       // Show feedback UI if we have a recent response
       if (lastLisResponse && lastLisResponse.length > 5 && !document.hidden) {
         feedbackUi.style.display = "flex";

@@ -1845,22 +1845,25 @@ async def lifespan(application: FastAPI):
     global anthropic_client, cached_projects
     if ANTHROPIC_API_KEY:
         anthropic_client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
-        # ── Validate API key at startup — don't waste time on dead keys ──
-        try:
-            test_resp = await anthropic_client.messages.create(
-                model=models.HAIKU,
-                max_tokens=5,
-                messages=[{"role": "user", "content": "hi"}],
-            )
-            log.info("Anthropic API key validated successfully.")
-        except Exception as e:
-            err_str = str(e).lower()
-            if "401" in err_str or "authentication" in err_str or "balance" in err_str or "403" in err_str:
-                log.warning(f"Anthropic API key is INVALID — marking dead. Will use free providers. ({e})")
-                API_DEAD["anthropic"] = True
-                anthropic_client = None
-            else:
-                log.warning(f"Anthropic API check failed (network?), will retry on demand: {e}")
+        # ── Validate API key in background so it doesn't block server startup ──
+        async def _validate_api_key():
+            global anthropic_client
+            try:
+                test_resp = await anthropic_client.messages.create(
+                    model=models.HAIKU,
+                    max_tokens=5,
+                    messages=[{"role": "user", "content": "hi"}],
+                )
+                log.info("Anthropic API key validated successfully.")
+            except Exception as e:
+                err_str = str(e).lower()
+                if "401" in err_str or "authentication" in err_str or "balance" in err_str or "403" in err_str:
+                    log.warning(f"Anthropic API key is INVALID — marking dead. Will use free providers. ({e})")
+                    API_DEAD["anthropic"] = True
+                    anthropic_client = None
+                else:
+                    log.warning(f"Anthropic API check failed (network?), will retry on demand: {e}")
+        asyncio.create_task(_validate_api_key())
     else:
         log.warning("ANTHROPIC_API_KEY not set - using free LLM providers")
     cached_projects = []
