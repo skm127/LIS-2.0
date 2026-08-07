@@ -107,15 +107,16 @@ export function createOrbScene(container: HTMLElement): OrbSceneApi {
   interface ColorGroup {
     current: THREE.Color;
     target: THREE.Color;
+    start: THREE.Color;
     mats: THREE.Material[];
   }
 
   const colorGroups: Record<ColorKey, ColorGroup> = {
-    bright: { current: new THREE.Color(0x33aaff), target: new THREE.Color(0x33aaff), mats: [] },
-    mid:    { current: new THREE.Color(0x0077dd), target: new THREE.Color(0x0077dd), mats: [] },
-    dim:    { current: new THREE.Color(0x004488), target: new THREE.Color(0x004488), mats: [] },
-    faint:  { current: new THREE.Color(0x002244), target: new THREE.Color(0x002244), mats: [] },
-    hot:    { current: new THREE.Color(0xaaddff), target: new THREE.Color(0xaaddff), mats: [] }
+    bright: { current: new THREE.Color(0x33aaff), target: new THREE.Color(0x33aaff), start: new THREE.Color(0x33aaff), mats: [] },
+    mid:    { current: new THREE.Color(0x0077dd), target: new THREE.Color(0x0077dd), start: new THREE.Color(0x0077dd), mats: [] },
+    dim:    { current: new THREE.Color(0x004488), target: new THREE.Color(0x004488), start: new THREE.Color(0x004488), mats: [] },
+    faint:  { current: new THREE.Color(0x002244), target: new THREE.Color(0x002244), start: new THREE.Color(0x002244), mats: [] },
+    hot:    { current: new THREE.Color(0xaaddff), target: new THREE.Color(0xaaddff), start: new THREE.Color(0xaaddff), mats: [] }
   };
   
   let transitionTime = 0;
@@ -768,7 +769,7 @@ export function createOrbScene(container: HTMLElement): OrbSceneApi {
       const keys: ColorKey[] = ['bright', 'mid', 'dim', 'faint', 'hot'];
       for (const k of keys) {
         const group = colorGroups[k];
-        group.current.lerpHSL(group.target, ease);
+        group.current.copy(group.start).lerpHSL(group.target, ease);
         for (const mat of group.mats) {
           if ('color' in mat) {
             (mat as any).color.copy(group.current);
@@ -964,6 +965,12 @@ export function createOrbScene(container: HTMLElement): OrbSceneApi {
     updateState: (state: string) => { currentState = state; },
     setAnalyser: (node: AnalyserNode | null) => { audioAnalyser = node; },
     setEmotion(palette: Record<string, string>, intensity: number, durationMs: number) {
+      colorGroups.bright.start.copy(colorGroups.bright.current);
+      colorGroups.mid.start.copy(colorGroups.mid.current);
+      colorGroups.dim.start.copy(colorGroups.dim.current);
+      colorGroups.faint.start.copy(colorGroups.faint.current);
+      colorGroups.hot.start.copy(colorGroups.hot.current);
+
       colorGroups.bright.target.set(palette.bright);
       colorGroups.mid.target.set(palette.mid);
       colorGroups.dim.target.set(palette.dim);
