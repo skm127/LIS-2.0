@@ -108,8 +108,8 @@ class LLMProviders:
             return resp.content[0].text
         except Exception as e:
             err_str = str(e).lower()
-            if "balance" in err_str or "400" in str(e):
-                log.warning("Claude credits exhausted. Marking dead. Cascading to free chain.")
+            if "balance" in err_str or "400" in str(e) or "401" in str(e) or "429" in str(e):
+                log.warning("Claude credits exhausted or rate limited. Marking dead. Cascading to free chain.")
                 self.dead["anthropic"] = True
             else:
                 log.error(f"Claude error: {e}")
@@ -147,6 +147,8 @@ class LLMProviders:
                     return resp.json()["choices"][0]["message"]["content"]
                 else:
                     log.error(f"Groq API error: {resp.status_code} {resp.text[:200]}")
+                    if resp.status_code in [401, 403, 404, 429]:
+                        self.dead["groq"] = True
                     return None
         except Exception as e:
             log.error(f"Groq exception: {e}")
@@ -186,7 +188,7 @@ class LLMProviders:
                             return content[0].get("text", "")
                 else:
                     log.error(f"Gemini API error: {resp.status_code}")
-                    if resp.status_code in [401, 403]:
+                    if resp.status_code in [401, 403, 404, 429]:
                         self.dead["gemini"] = True
                     return None
         except Exception as e:
@@ -223,7 +225,7 @@ class LLMProviders:
                 if resp.status_code == 200:
                     self._track_usage(0, 0, "cerebras")
                     return resp.json()["choices"][0]["message"]["content"]
-                elif resp.status_code in [401, 403]:
+                elif resp.status_code in [401, 403, 404, 429]:
                     self.dead["cerebras"] = True
                     return None
                 else:
@@ -263,18 +265,17 @@ class LLMProviders:
                 if resp.status_code == 200:
                     self._track_usage(0, 0, "nvidia")
                     return resp.json()["choices"][0]["message"]["content"]
-                elif resp.status_code in [401, 403]:
+                elif resp.status_code in [401, 403, 404, 429]:
                     self.dead["nvidia"] = True
-                    log.warning(f"NVIDIA auth error: {resp.status_code}")
-                    return None
-                elif resp.status_code == 429:
-                    log.warning("NVIDIA rate limit (429) - skipping without marking dead")
+                    log.warning(f"NVIDIA auth or rate limit error: {resp.status_code}")
                     return None
                 else:
                     log.error(f"NVIDIA API error: {resp.status_code}")
                     return None
         except Exception as e:
             log.error(f"NVIDIA exception: {e}")
+            if isinstance(e, httpx.TimeoutException) or "timeout" in str(e).lower():
+                self.dead["nvidia"] = True
             return None
 
     async def _generate_openrouter(
@@ -313,7 +314,7 @@ class LLMProviders:
                         self._track_usage(0, 0, "openrouter")
                         return choices[0].get("message", {}).get("content", "")
                     return None
-                elif resp.status_code in [401, 403]:
+                elif resp.status_code in [401, 403, 404, 429]:
                     self.dead["openrouter"] = True
                     return None
                 else:
