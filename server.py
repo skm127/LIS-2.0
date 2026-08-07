@@ -3119,7 +3119,7 @@ async def voice_handler(ws: WebSocket):
                     runtime_context = f"{session_summary}\n\n" if session_summary else ""
 
                     # Neural processing (sentiment + monologue) — non-blocking
-                    memories = memory.build_memory_context(user_text)
+                    memories = await asyncio.to_thread(memory.build_memory_context, user_text)
                     try:
                         sentiment_data, thought = await asyncio.wait_for(
                             asyncio.gather(
@@ -3268,7 +3268,7 @@ async def voice_handler(ws: WebSocket):
                                 # Notify user, then process their request through the normal pipeline
                                 prefix = "Claude Code is offline right now — credits likely, sir. Switching to conversation mode. "
                                 persona_prompt = empathy.get_persona_prompt()
-                                context_summary = memory.get_context_summary()
+                                context_summary = await asyncio.to_thread(memory.get_context_summary)
                                 full_context = f"{persona_prompt}\nInternal thought: {thought}\n\n{context_summary}"
 
                                 fallback_response = await generate_response(
@@ -3294,12 +3294,18 @@ async def voice_handler(ws: WebSocket):
                     # ── CONVERSATION MODE ──
                     else:
                         persona_prompt = empathy.get_persona_prompt()
-                        context_summary = memory.get_context_summary()
+                        context_summary = await asyncio.to_thread(memory.get_context_summary)
 
                         # ── RAG: Augment with semantic vector memory ──
                         semantic_ctx = ""
                         try:
-                            semantic_ctx = rag.build_augmented_context(user_text, max_items=5).formatted_text
+                            rag_result = await asyncio.wait_for(
+                                asyncio.to_thread(rag.build_augmented_context, user_text, 5),
+                                timeout=4.0
+                            )
+                            semantic_ctx = rag_result.formatted_text
+                        except asyncio.TimeoutError:
+                            log.warning("RAG vector search timed out after 4s, skipping")
                         except Exception as e:
                             log.debug(f"Vector memory search skipped: {e}")
 

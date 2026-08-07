@@ -371,7 +371,21 @@ class EmpathyEngine:
 
         current_name = self.current_state.name.title()
 
-        if suggested_name == current_name:
+        if suggested_name == "Calm" and current_name != "Calm":
+            # FAST FALLBACK: If sentiment reads calm, ease out of elevated states quickly
+            self._intensity = max(0.1, self._intensity - 0.25)
+            if self._intensity < 0.25:
+                # Fully relaxed back to calm
+                self._undertone = self.current_state
+                self._undertone_turns = 2
+                self.current_state = EmotionalState(
+                    name="Calm",
+                    tone_modifier=tone,
+                    energy=energy,
+                    description=desc
+                )
+                self._intensity = new_intensity
+        elif suggested_name == current_name:
             # REINFORCEMENT: same state repeated → intensity grows
             self._intensity = min(1.0, self._intensity + 0.15)
         else:
