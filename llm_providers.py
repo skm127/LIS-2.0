@@ -355,7 +355,7 @@ class LLMProviders:
                     log.warning(f"Ollama not available: {resp.status_code}")
                     return None
         except Exception as e:
-            log.debug(f"Ollama not running: {e}")
+            log.warning(f"Ollama exception: {type(e).__name__} - {e}")
             return None
 
     # ═══════════════════════════════════════════════════════════════════
