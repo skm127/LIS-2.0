@@ -1136,7 +1136,7 @@ async def generate_text_groq(messages: list[dict], system_prompt: str = "") -> O
     full_messages.extend(messages)
 
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=3.0)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=2.0)) as client:
             resp = await client.post(
                 url,
                 headers=headers,
@@ -1205,7 +1205,7 @@ async def generate_text_ollama(messages: list[dict], system_prompt: str = "") ->
     full_messages.extend(messages[-10:])
     
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=3.0)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=2.0)) as client:
             resp = await client.post(
                 f"{OLLAMA_URL}/api/chat",
                 json={
@@ -1276,7 +1276,7 @@ async def generate_text_openrouter(messages: list[dict], system_prompt: str = ""
     full_messages.extend(messages[-10:])
 
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=3.0)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=2.0)) as client:
             resp = await client.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 headers={
@@ -1321,7 +1321,7 @@ async def generate_text_nvidia(messages: list[dict], system_prompt: str = "") ->
     full_messages.extend(messages[-10:])
 
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(45.0, connect=3.0)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=2.0)) as client:
             resp = await client.post(
                 "https://integrate.api.nvidia.com/v1/chat/completions",
                 headers={
@@ -1414,7 +1414,7 @@ async def generate_text(
                     system=system,
                     messages=messages,
                 ),
-                timeout=30.0
+                timeout=12.0
             )
             return resp.content[0].text
         except Exception as e:
@@ -1527,8 +1527,8 @@ async def generate_response(
         system += f"\n\nACTIVE LOOKUPS:\n{lookup_status}\nIf asked about progress, report this status."
 
     # Build memory context (recent facts + RAG past conversations)
-    memory_ctx = build_memory_context(text)
-    past_convo_ctx = memory.recall_conversations(text)
+    memory_ctx = await asyncio.to_thread(build_memory_context, text)
+    past_convo_ctx = await asyncio.to_thread(memory.recall_conversations, text)
     
     # ── DEEP REASONING DETECTION ──
     is_deep = any(w in text.lower() for w in ["explain", "solve", "how", "why", "calculate", "analyze"])
@@ -3433,20 +3433,27 @@ async def voice_handler(ws: WebSocket):
                 if not chunks:
                     chunks = [tts_text]
                 
-                # Stream the chunks sequentially to reduce TTFB (Time To First Byte) for audio
+                # Pipeline TTS: synthesize next chunk while sending current one
+                # This eliminates the dead gap between audio segments that causes glitching
                 audio_sent = False
-                for chunk in chunks:
-                    if not chunk: continue
-                    chunk_audio = await synthesize_speech(chunk)
-                    if chunk_audio and len(chunk_audio) > 512:
-                        await ws.send_json({"type": "audio", "data": base64.b64encode(chunk_audio).decode(), "text": chunk})
-                        audio_sent = True
+                valid_chunks = [c for c in chunks if c]
+                if valid_chunks:
+                    # Start first chunk immediately
+                    next_audio_task = asyncio.create_task(synthesize_speech(valid_chunks[0]))
+                    for i, chunk in enumerate(valid_chunks):
+                        chunk_audio = await next_audio_task
+                        # Start synthesizing next chunk BEFORE sending current
+                        if i + 1 < len(valid_chunks):
+                            next_audio_task = asyncio.create_task(synthesize_speech(valid_chunks[i + 1]))
+                        if chunk_audio and len(chunk_audio) > 512:
+                            await ws.send_json({"type": "audio", "data": base64.b64encode(chunk_audio).decode(), "text": chunk})
+                            audio_sent = True
                 
                 if audio_sent:
                     
                     # Log to Long-term Memory (FTS5 keyword search)
-                    memory.store_turn("user", user_text)
-                    memory.store_turn("assistant", response_text)
+                    asyncio.create_task(asyncio.to_thread(memory.store_turn, "user", user_text))
+                    asyncio.create_task(asyncio.to_thread(memory.store_turn, "assistant", response_text))
 
                     # ── RAG: Auto-embed in vector memory (background) ──
                     asyncio.create_task(asyncio.to_thread(
