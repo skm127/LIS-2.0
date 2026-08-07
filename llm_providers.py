@@ -335,13 +335,17 @@ class LLMProviders:
         full_messages.extend(messages[-10:])
 
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=2.0)) as client:
+            # Local models take time to load into VRAM, so use a generous 60s timeout
+            async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=2.0)) as client:
                 resp = await client.post(
                     f"{self.ollama_url}/api/chat",
                     json={
                         "model": models.OLLAMA_DEFAULT,
                         "messages": full_messages,
                         "stream": False,
+                        "options": {
+                            "num_predict": max_tokens
+                        }
                     },
                 )
                 if resp.status_code == 200:
