@@ -98,20 +98,26 @@ class CompanyLookupSkill(Skill):
     async def execute(self, name: str, jurisdiction: str = "", **kwargs) -> SkillResult:
         results = {"query": name}
         
-        # OpenCorporates
-        oc_url = f"https://api.opencorporates.com/v0.4.8/companies/search?q={urllib.parse.quote(name)}"
-        if jurisdiction:
-            oc_url += f"&jurisdiction_code={urllib.parse.quote(jurisdiction)}"
-        
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(oc_url)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    companies = data.get("results", {}).get("companies", [])
-                    results["opencorporates"] = [c.get("company") for c in companies[:5]]
-        except Exception as e:
-            results["opencorporates_error"] = str(e)
+        # OpenCorporates (requires API token — see https://api.opencorporates.com)
+        oc_api_key = os.getenv("OPENCORPORATES_API_KEY")
+        if oc_api_key:
+            oc_url = f"https://api.opencorporates.com/v0.4.8/companies/search?q={urllib.parse.quote(name)}&api_token={oc_api_key}"
+            if jurisdiction:
+                oc_url += f"&jurisdiction_code={urllib.parse.quote(jurisdiction)}"
+            
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    resp = await client.get(oc_url)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        companies = data.get("results", {}).get("companies", [])
+                        results["opencorporates"] = [c.get("company") for c in companies[:5]]
+                    else:
+                        results["opencorporates_error"] = f"HTTP {resp.status_code}"
+            except Exception as e:
+                results["opencorporates_error"] = str(e)
+        else:
+            results["opencorporates_error"] = "Skipped — OPENCORPORATES_API_KEY not set in .env"
             
         # EDGAR full-text
         edgar_url = f"https://efts.sec.gov/LATEST/search-index?q={urllib.parse.quote(name)}"
@@ -141,9 +147,14 @@ class MetadataExtractSkill(Skill):
             return SkillResult(False, f"File not found on local path: {file_path}")
             
         try:
-            # -j for JSON output
-            output = await asyncio.to_thread(subprocess.check_output, ['exiftool', '-j', file_path], stderr=subprocess.STDOUT)
-            data = json.loads(output)
+            # -j for JSON output; capture stderr separately so warnings don't corrupt JSON
+            proc_result = await asyncio.to_thread(
+                subprocess.run, ['exiftool', '-j', file_path],
+                capture_output=True
+            )
+            if proc_result.returncode != 0 and not proc_result.stdout.strip():
+                return SkillResult(False, f"exiftool failed: {proc_result.stderr.decode(errors='replace')[:300]}")
+            data = json.loads(proc_result.stdout)
             osint_store.log_evidence(self.name, file_path, "exiftool (local)", data)
             return SkillResult(True, f"Extracted metadata for {file_path}", data=data)
         except FileNotFoundError:

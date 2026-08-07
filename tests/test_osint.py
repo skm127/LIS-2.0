@@ -91,11 +91,17 @@ async def test_archive_lookup_error(mock_get):
     assert res is not None
 
 @pytest.mark.asyncio
+@patch('osint_store.log_evidence')
 @patch('os.path.exists')
 @patch('asyncio.to_thread', new_callable=AsyncMock)
-async def test_metadata_extract_to_thread(mock_to_thread, mock_exists):
+async def test_metadata_extract_to_thread(mock_to_thread, mock_exists, mock_log):
     mock_exists.return_value = True
-    mock_to_thread.return_value = b'{"test": "data"}'
+    # subprocess.run returns a CompletedProcess, not raw bytes
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = b'[{"FileName": "test.jpg", "FileSize": "1024"}]'
+    mock_result.stderr = b''
+    mock_to_thread.return_value = mock_result
     
     skill = MetadataExtractSkill()
     res = await skill.execute("test.jpg")
